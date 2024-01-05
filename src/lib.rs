@@ -94,6 +94,10 @@ impl<const DIM: usize, const BRANCH: u32, T> SieveTree<DIM, BRANCH, T> {
         elt.value
     }
 
+    pub fn bounds(&self) -> Rect<DIM> {
+        self.root_coords.bounds()
+    }
+
     pub fn get(&self, id: usize) -> Option<&T> {
         Some(&self.elements.get(id)?.value)
     }
