@@ -34,6 +34,52 @@ impl<const DIM: usize, const BRANCH: u32, T> SieveTree<DIM, BRANCH, T> {
         id
     }
 
+    /// Split nodes with more than `elements_per_node`
+    pub fn balance(&mut self, elements_per_node: usize)
+    where
+        T: Bounded<DIM>,
+    {
+        let mut stack = alloc::vec::Vec::<(NodeCoords<DIM, BRANCH>, &mut Node)>::new();
+        stack.push((self.root_coords, &mut self.root));
+        while let Some((coords, node)) = stack.pop() {
+            // Balance elements in current node
+            if node.elements > elements_per_node {
+                let children = ensure_children::<DIM, BRANCH>(&mut node.children);
+                let mut next_elt = node.first_element;
+                let mut prev_elt = None;
+                while let Some(element) = next_elt {
+                    next_elt = self.elements[element].next;
+                    let bounds = self.elements[element].value.bounds();
+                    let Some(child_coords) = bounds.location_in::<BRANCH>(coords.level - 1) else {
+                        // Too large to move into children
+                        prev_elt = Some(element);
+                        continue;
+                    };
+                    // Link into child
+                    link(
+                        &mut self.elements,
+                        &mut children[child_coords.index_in_parent()],
+                        element,
+                    );
+                    // Unlink from `node`
+                    let prev_link = match prev_elt {
+                        None => &mut node.first_element,
+                        Some(x) => &mut self.elements[x].next,
+                    };
+                    node.elements -= 1;
+                    *prev_link = next_elt;
+                }
+            }
+
+            // Queue child nodes for balancing
+            if let Some(children) = node.children.as_mut() {
+                for (i, child) in children.iter_mut().enumerate() {
+                    stack.push((coords.child(i).unwrap(), child));
+                }
+            }
+        }
+    }
+
     pub fn remove(&mut self, id: usize) -> T
     where
         T: Bounded<DIM>,
@@ -110,11 +156,7 @@ fn find_smallest_parent<'a, const DIM: usize, const BRANCH: u32>(
         let mut current = &mut *root;
         let mut current_level = root_coords.level;
         while current_level > old_root_coords.level {
-            let children = current.children.insert(
-                (0..BRANCH.pow(DIM as u32) as usize)
-                    .map(|_| Node::default())
-                    .collect(),
-            );
+            let children = ensure_children::<DIM, BRANCH>(&mut current.children);
             current_level -= 1;
             let coords = NodeCoords::<DIM, BRANCH>::from_point(old_root_coords.min, current_level);
             current = &mut children[coords.index_in_parent()];
@@ -207,7 +249,6 @@ impl<const DIM: usize, const BRANCH: u32> NodeCoords<DIM, BRANCH> {
             .sum()
     }
 
-    #[allow(dead_code)]
     fn child(&self, index: usize) -> Option<Self> {
         let level = self.level.checked_sub(1)?;
         let extent = node_extent::<BRANCH>(level);
@@ -343,6 +384,11 @@ impl<const DIM: usize> Rect<DIM> {
         max: [u64::MAX; DIM],
     };
 
+    /// Construct a rectangle covering a single coordinate
+    pub const fn point(p: [u64; DIM]) -> Self {
+        Self { min: p, max: p }
+    }
+
     /// Number of points inside the rectangle on each axis
     fn extents(&self) -> [u64; DIM] {
         array::from_fn(|i| self.max[i] - self.min[i] + 1)
@@ -358,8 +404,26 @@ impl<const DIM: usize> Rect<DIM> {
                 min: [0; DIM],
             };
         };
+
         let level = extent.ilog(BRANCH as u64);
         NodeCoords::from_point(self.min, level)
+    }
+
+    /// Find the node at `level` which a value with these bounds should be stored in, or `None` if
+    /// the value must be stored at a higher level
+    fn location_in<const BRANCH: u32>(&self, level: u32) -> Option<NodeCoords<DIM, BRANCH>> {
+        let Some(extent) = self.extents().into_iter().max() else {
+            // 0-dimensional case
+            return Some(NodeCoords {
+                level,
+                min: [0; DIM],
+            });
+        };
+
+        if extent > node_extent::<BRANCH>(level + 1) {
+            return None;
+        }
+        Some(NodeCoords::from_point(self.min, level))
     }
 
     pub fn intersects(&self, other: &Self) -> bool {
@@ -503,8 +567,19 @@ struct Node {
     // This should become `Box<[Node; BRANCH.pow(DIM)]>` as soon as Rust permits that
     children: Option<Box<[Node]>>,
     /// Length of elements associated directly with this node
+    // TODO: Count only unsieved elements
     elements: usize,
     first_element: Option<usize>,
+}
+
+fn ensure_children<const DIM: usize, const BRANCH: u32>(
+    children: &mut Option<Box<[Node]>>,
+) -> &mut [Node] {
+    children.get_or_insert_with(|| {
+        (0..BRANCH.pow(DIM as u32) as usize)
+            .map(|_| Node::default())
+            .collect()
+    })
 }
 
 #[derive(Debug)]
@@ -564,6 +639,25 @@ mod tests {
     }
 
     #[test]
+    fn balance() {
+        let mut t = SieveTree::<2, 4, Rect<2>>::new();
+        for y in 0..10 {
+            for x in 0..10 {
+                t.insert(Rect::point([x, y]));
+            }
+        }
+        t.balance(1);
+        for (coords, node) in nodes(&t) {
+            if coords.level > 0 {
+                assert_eq!(node.elements, 0, "unexpected elements at {}", coords);
+            } else {
+                assert!(node.elements <= 1, "too many elements at {}", coords)
+            }
+        }
+        assert!(nodes(&t).count() > 100);
+    }
+
+    #[test]
     fn smoke() {
         let mut t = SieveTree::<2, 4, Rect<2>>::new();
         t.insert(Rect {
@@ -595,5 +689,26 @@ mod tests {
             .count(),
             0
         );
+    }
+
+    fn nodes<const DIM: usize, const BRANCH: u32, T>(
+        tree: &SieveTree<DIM, BRANCH, T>,
+    ) -> impl Iterator<Item = (NodeCoords<DIM, BRANCH>, &'_ Node)> {
+        let mut stack = alloc::vec::Vec::new();
+        if let Some((coords, ref node)) = tree.root {
+            stack.push((coords, node));
+        }
+        core::iter::from_fn(move || {
+            let (coords, node) = stack.pop()?;
+            if let Some(children) = node.children.as_ref() {
+                stack.extend(
+                    children
+                        .iter()
+                        .enumerate()
+                        .map(|(i, node)| (coords.child(i).unwrap(), node)),
+                );
+            }
+            Some((coords, node))
+        })
     }
 }
