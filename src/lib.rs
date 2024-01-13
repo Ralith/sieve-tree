@@ -59,7 +59,7 @@ impl<const DIM: usize, const BRANCH: u32, T> SieveTree<DIM, BRANCH, T> {
     fn depth_first(&self) -> DepthFirstTraversal<'_, DIM, BRANCH> {
         DepthFirstTraversal {
             queue: [DepthFirstQueueEntry {
-                node: self.root_coords,
+                coords: self.root_coords,
                 children: self.root.children.as_ref().map_or(&[], |x| x),
                 index: 0,
             }]
@@ -387,16 +387,13 @@ impl<'a, const DIM: usize, const BRANCH: u32> Iterator for DepthFirstTraversal<'
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             let next = self.queue.last_mut()?;
-            let Some(node) = next.children.get(next.index) else {
+            let Some((coords, node)) = next.next() else {
                 self.queue.pop();
                 continue;
             };
-            let coords = next.node;
-            let child_coords = coords.child(next.index);
-            next.index += 1;
-            if let (Some(children), Some(child_coords)) = (node.children.as_ref(), child_coords) {
+            if let Some(children) = node.children.as_ref() {
                 self.queue.push(DepthFirstQueueEntry {
-                    node: child_coords,
+                    coords,
                     children,
                     index: 0,
                 });
@@ -407,9 +404,20 @@ impl<'a, const DIM: usize, const BRANCH: u32> Iterator for DepthFirstTraversal<'
 }
 
 struct DepthFirstQueueEntry<'a, const DIM: usize, const BRANCH: u32> {
-    node: NodeCoords<DIM, BRANCH>,
+    coords: NodeCoords<DIM, BRANCH>,
     children: &'a [Node],
     index: usize,
+}
+
+impl<'a, const DIM: usize, const BRANCH: u32> Iterator for DepthFirstQueueEntry<'a, DIM, BRANCH> {
+    type Item = (NodeCoords<DIM, BRANCH>, &'a Node);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let child = self.children.get(self.index)?;
+        let child_coords = self.coords.child(self.index).unwrap();
+        self.index += 1;
+        Some((child_coords, child))
+    }
 }
 
 pub struct Intersections<'a, const DIM: usize, const BRANCH: u32, T> {
