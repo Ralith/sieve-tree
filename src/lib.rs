@@ -465,6 +465,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn common_ancestors() {
+        type Node1D2 = NodeCoords<1, 2>;
+
+        let min = Node1D2::from_point([0], 0);
+        assert_eq!(min.smallest_common_ancestor(&min), min);
+        assert_eq!(
+            Node1D2::from_point([1], 0).smallest_common_ancestor(&min),
+            Node1D2::from_point([0], 1)
+        );
+        assert_eq!(
+            Node1D2::from_point([1], 0).smallest_common_ancestor(&min),
+            Node1D2::from_point([0], 1)
+        );
+        assert_eq!(
+            Node1D2::from_point([2], 0).smallest_common_ancestor(&min),
+            Node1D2::from_point([0], 2)
+        );
+        assert_eq!(
+            Node1D2::from_point([3], 0).smallest_common_ancestor(&min),
+            Node1D2::from_point([0], 2)
+        );
+    }
+
+    #[test]
     fn smoke() {
         let mut t = SieveTree::<2, 4, Rect<2>>::new();
         t.insert(Rect {
