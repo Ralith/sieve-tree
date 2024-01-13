@@ -69,17 +69,27 @@ impl<const DIM: usize, const BRANCH: u32, T> SieveTree<DIM, BRANCH, T> {
         }
     }
 
-    /// Traverse all elements that intersect with `bounds`
-    pub fn intersections<'a>(&'a self, bounds: &'a Rect<DIM>) -> Intersections<'a, DIM, BRANCH, T> {
+    /// Traverse all elements in nodes that intersect with `bounds`
+    pub fn intersections(&self, bounds: Rect<DIM>) -> Intersections<'_, DIM, BRANCH, T> {
         let mut out = Intersections {
-            bounds,
             elements: &self.elements,
             traversal: DepthFirstTraversal::default(),
             next_element: None,
         };
-        if bounds.intersects(&self.root_coords.bounds()) {
-            out.next_element = self.root.first_element;
-            out.traversal = self.depth_first();
+        if let Some(children) = self.root.children.as_ref() {
+            if bounds.intersects(&self.root_coords.bounds()) {
+                out.next_element = self.root.first_element;
+                out.traversal = DepthFirstTraversal {
+                    queue: [IntersectingChildren::new(
+                        &bounds,
+                        self.root_coords,
+                        children,
+                    )]
+                    .into_iter()
+                    .collect(),
+                    context: bounds,
+                };
+            }
         }
         out
     }
@@ -223,11 +233,16 @@ impl<const DIM: usize, const BRANCH: u32> NodeCoords<DIM, BRANCH> {
     }
 
     fn children_overlapping(&self, bounds: &Rect<DIM>) -> Option<NodesWithin<DIM, BRANCH>> {
-        let range = self.bounds().intersection(bounds);
+        let mut range = self.bounds().intersection(bounds);
+        let level = self.level.checked_sub(1)?;
+        let extent = node_extent::<BRANCH>(level);
+        // Clamp lower bound to `level` grid, then subtract one step in each dimension to allow for
+        // edge-crossing
+        range.min = range.min.map(|x| (x - x % extent).saturating_sub(extent));
         Some(NodesWithin {
             range,
             cursor: range.min,
-            level: self.level.checked_sub(1)?,
+            level,
         })
     }
 
@@ -289,15 +304,30 @@ impl<const DIM: usize, const BRANCH: u32> Iterator for NodesWithin<DIM, BRANCH> 
             level: self.level,
             min: self.cursor,
         };
-        self.cursor[0] += 1;
+        let extent = node_extent::<BRANCH>(self.level);
+        self.cursor[0] += extent;
         for i in 1..DIM {
             if self.cursor[i - 1] <= self.range.max[i - 1] {
                 break;
             }
             self.cursor[i - 1] = self.range.min[i - 1];
-            self.cursor[i] += 1;
+            self.cursor[i] += extent;
         }
         Some(result)
+    }
+}
+
+impl<const DIM: usize, const BRANCH: u32> Default for NodesWithin<DIM, BRANCH> {
+    /// Construct the empty iterator
+    fn default() -> Self {
+        Self {
+            range: Rect {
+                min: [0; DIM],
+                max: [0; DIM],
+            },
+            cursor: [1; DIM],
+            level: 0,
+        }
     }
 }
 
@@ -456,10 +486,37 @@ impl<'a, const DIM: usize, const BRANCH: u32> NodeIter<'a, DIM, BRANCH>
     }
 }
 
+struct IntersectingChildren<'a, const DIM: usize, const BRANCH: u32> {
+    children: &'a [Node],
+    inner: NodesWithin<DIM, BRANCH>,
+}
+
+impl<'a, const DIM: usize, const BRANCH: u32> Iterator for IntersectingChildren<'a, DIM, BRANCH> {
+    type Item = (NodeCoords<DIM, BRANCH>, &'a Node);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let child_coords = self.inner.next()?;
+        let child = &self.children[child_coords.index_in_parent()];
+        Some((child_coords, child))
+    }
+}
+
+impl<'a, const DIM: usize, const BRANCH: u32> NodeIter<'a, DIM, BRANCH>
+    for IntersectingChildren<'a, DIM, BRANCH>
+{
+    type Context = Rect<DIM>;
+
+    fn new(bounds: &Rect<DIM>, coords: NodeCoords<DIM, BRANCH>, children: &'a [Node]) -> Self {
+        Self {
+            children,
+            inner: coords.children_overlapping(bounds).unwrap(),
+        }
+    }
+}
+
 pub struct Intersections<'a, const DIM: usize, const BRANCH: u32, T> {
-    bounds: &'a Rect<DIM>,
     elements: &'a Slab<Element<T>>,
-    traversal: DepthFirstTraversal<AllChildren<'a, DIM, BRANCH>, ()>,
+    traversal: DepthFirstTraversal<IntersectingChildren<'a, DIM, BRANCH>, Rect<DIM>>,
     next_element: Option<usize>,
 }
 
@@ -475,19 +532,11 @@ where
             if let Some(index) = self.next_element.take() {
                 let elt = &self.elements[index];
                 self.next_element = elt.next;
-                if !elt.value.bounds().intersects(self.bounds) {
-                    continue;
-                }
                 return Some((index, &elt.value));
             }
             // If the current node has no elements, find a new node
-            loop {
-                let (coords, node) = self.traversal.next()?;
-                if !coords.bounds().intersects(self.bounds) {
-                    continue;
-                }
-                self.next_element = node.first_element;
-            }
+            let (_, node) = self.traversal.next()?;
+            self.next_element = node.first_element;
         }
     }
 }
@@ -565,7 +614,7 @@ mod tests {
             max: [107, 107],
         });
         assert_eq!(
-            t.intersections(&Rect {
+            t.intersections(Rect {
                 min: [0, 0],
                 max: [10, 10]
             })
@@ -573,7 +622,7 @@ mod tests {
             1
         );
         assert_eq!(
-            t.intersections(&Rect {
+            t.intersections(Rect {
                 min: [10, 20],
                 max: [30, 40]
             })
@@ -582,15 +631,7 @@ mod tests {
         );
 
         assert_eq!(
-            t.intersections(&Rect {
-                min: [0, 0],
-                max: [2, 2]
-            })
-            .count(),
-            0
-        );
-        assert_eq!(
-            t.intersections(&Rect {
+            t.intersections(Rect {
                 min: [1000, 1000],
                 max: [1001, 1001],
             })
