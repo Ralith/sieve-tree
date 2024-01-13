@@ -88,7 +88,7 @@ impl<const DIM: usize, const BRANCH: u32, T> Default for SieveTree<DIM, BRANCH, 
     fn default() -> Self {
         Self {
             root_coords: NodeCoords {
-                level: u64::MAX.ilog(BRANCH as u64),
+                level: 0,
                 min: [0; DIM],
             },
             root: Node::default(),
@@ -111,13 +111,13 @@ fn find_smallest_parent<'a, const DIM: usize, const BRANCH: u32>(
 
         let mut current = &mut *root;
         let mut current_level = root_coords.level;
-        while current_level < old_root_coords.level {
+        while current_level > old_root_coords.level {
             let children = current.children.insert(
                 (0..BRANCH.pow(DIM as u32) as usize)
                     .map(|_| Node::default())
                     .collect(),
             );
-            current_level += 1;
+            current_level -= 1;
             let coords = NodeCoords::<DIM, BRANCH>::from_point(old_root_coords.min, current_level);
             current = &mut children[coords.index_in_parent()];
         }
@@ -134,7 +134,7 @@ fn find_smallest_parent<'a, const DIM: usize, const BRANCH: u32>(
             if current_level == target.level {
                 break;
             }
-            current_level += 1;
+            current_level -= 1;
             let child_coords = NodeCoords::<DIM, BRANCH>::from_point(target.min, current_level);
             // Hack around borrowck limitation
             unsafe {
@@ -174,6 +174,7 @@ fn unlink<T>(elements: &mut Slab<Element<T>>, node: &mut Node, element: usize) {
 struct NodeCoords<const DIM: usize, const BRANCH: u32> {
     /// Point in this node with the smallest coordinates on each dimension
     min: [u64; DIM],
+    /// Exponent of `BRANCH` which is the node's extent in each dimension
     level: u32,
 }
 
@@ -195,11 +196,11 @@ impl<const DIM: usize, const BRANCH: u32> NodeCoords<DIM, BRANCH> {
     }
 
     fn parent(&self) -> Self {
-        Self::from_point(self.min, self.level.saturating_sub(1))
+        Self::from_point(self.min, self.level + 1)
     }
 
     fn index_in_parent(&self) -> usize {
-        let parent_extent = node_extent::<BRANCH>(self.level.saturating_sub(1));
+        let parent_extent = node_extent::<BRANCH>(self.level + 1);
         let local_coords = self.min.map(|x| x % parent_extent);
         local_coords
             .into_iter()
@@ -208,35 +209,39 @@ impl<const DIM: usize, const BRANCH: u32> NodeCoords<DIM, BRANCH> {
             .sum()
     }
 
-    fn child(&self, index: usize) -> Self {
-        let extent = node_extent::<BRANCH>(self.level);
-        Self {
+    fn child(&self, index: usize) -> Option<Self> {
+        let level = self.level.checked_sub(1)?;
+        let extent = node_extent::<BRANCH>(level);
+        Some(Self {
+            level,
             min: array::from_fn(|i| {
                 let offset = (index as u64 / (BRANCH as u64).pow(i as u32)) % BRANCH as u64;
                 self.min[i] + offset * extent
             }),
-            level: self.level + 1,
-        }
+        })
     }
 
-    fn children_overlapping(&self, bounds: &Rect<DIM>) -> NodesWithin<DIM, BRANCH> {
+    fn children_overlapping(&self, bounds: &Rect<DIM>) -> Option<NodesWithin<DIM, BRANCH>> {
         let range = self.bounds().intersection(bounds);
-        NodesWithin {
+        Some(NodesWithin {
             range,
             cursor: range.min,
-            level: self.level + 1,
-        }
+            level: self.level.checked_sub(1)?,
+        })
     }
 
     fn smallest_common_ancestor(&self, other: &Self) -> Self {
         let mut a = *self;
         let mut b = *other;
-        if a.level > b.level {
+        // Ensure `a` is the largest node
+        if a.level < b.level {
             mem::swap(&mut a, &mut b);
         }
-        while a.level < b.level {
+        // Find the parent of the smaller node which is on the larger node's level
+        while a.level > b.level {
             b = b.parent();
         }
+        // Find the common parent
         while a.min != b.min {
             a = a.parent();
             b = b.parent();
@@ -247,7 +252,7 @@ impl<const DIM: usize, const BRANCH: u32> NodeCoords<DIM, BRANCH> {
 
 impl<const DIM: usize, const BRANCH: u32> fmt::Display for NodeCoords<DIM, BRANCH> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for level in 0..self.level {
+        for level in (0..=self.level).rev() {
             let extent = node_extent::<BRANCH>(level);
             if level != 0 {
                 write!(f, ".")?;
@@ -296,7 +301,7 @@ impl<const DIM: usize, const BRANCH: u32> Iterator for NodesWithin<DIM, BRANCH> 
 }
 
 const fn node_extent<const BRANCH: u32>(level: u32) -> u64 {
-    u64::MAX / (BRANCH as u64).pow(level)
+    (BRANCH as u64).saturating_pow(level)
 }
 
 pub trait Bounded<const DIM: usize> {
@@ -305,7 +310,7 @@ pub trait Bounded<const DIM: usize> {
 
 /// An axis-aligned bounding box
 // `DIM` should probably be an associated constant, but we can't use those in array lengths yet.
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub struct Rect<const DIM: usize> {
     /// Smallest point inside the box
     pub min: [u64; DIM],
@@ -319,11 +324,13 @@ impl<const DIM: usize> Rect<DIM> {
         max: [u64::MAX; DIM],
     };
 
+    /// Number of points inside the rectangle on each axis
     fn extents(&self) -> [u64; DIM] {
         array::from_fn(|i| self.max[i] - self.min[i] + 1)
     }
 
-    /// Find the smallest node that a value with these bounds could be stored in
+    /// Find the smallest node that a value with these bounds could be stored in, i.e. the largest
+    /// level with cells smaller than this `Rect`'s extents on any dimension
     fn location<const BRANCH: u32>(&self) -> NodeCoords<DIM, BRANCH> {
         let Some(extent) = self.extents().into_iter().max() else {
             // 0-dimensional case
@@ -387,7 +394,7 @@ impl<'a, const DIM: usize, const BRANCH: u32> Iterator for DepthFirstTraversal<'
             let coords = next.node;
             let child_coords = coords.child(next.index);
             next.index += 1;
-            if let Some(children) = node.children.as_ref() {
+            if let (Some(children), Some(child_coords)) = (node.children.as_ref(), child_coords) {
                 self.queue.push(DepthFirstQueueEntry {
                     node: child_coords,
                     children,
