@@ -56,9 +56,10 @@ impl<const DIM: usize, const BRANCH: u32, T> SieveTree<DIM, BRANCH, T> {
         Some(&mut self.elements.get_mut(id)?.value)
     }
 
-    fn depth_first(&self) -> DepthFirstTraversal<DepthFirstQueueEntry<'_, DIM, BRANCH>> {
+    fn depth_first(&self) -> DepthFirstTraversal<AllChildren<'_, DIM, BRANCH>, ()> {
         DepthFirstTraversal {
-            queue: [DepthFirstQueueEntry {
+            context: (),
+            queue: [AllChildren {
                 coords: self.root_coords,
                 children: self.root.children.as_ref().map_or(&[], |x| x),
                 index: 0,
@@ -375,12 +376,13 @@ impl<const DIM: usize> Bounded<DIM> for Rect<DIM> {
     }
 }
 
-struct DepthFirstTraversal<ChildIter> {
+struct DepthFirstTraversal<ChildIter, Context> {
     // `MAX_DEPTH` should be computed from `BRANCH` once Rust permits that
     queue: ArrayVec<ChildIter, MAX_DEPTH>,
+    context: Context,
 }
 
-impl<'a, const DIM: usize, const BRANCH: u32, I> Iterator for DepthFirstTraversal<I>
+impl<'a, const DIM: usize, const BRANCH: u32, I> Iterator for DepthFirstTraversal<I, I::Context>
 where
     // `+ Iterator<...>` is redundant here, but rustc insists...
     I: NodeIter<'a, DIM, BRANCH> + Iterator<Item = (NodeCoords<DIM, BRANCH>, &'a Node)>,
@@ -395,17 +397,22 @@ where
                 continue;
             };
             if let Some(children) = node.children.as_ref() {
-                self.queue.push(NodeIter::new(coords, children));
+                self.queue
+                    .push(NodeIter::new(&self.context, coords, children));
             }
             return Some((coords, node));
         }
     }
 }
 
-impl<I> Default for DepthFirstTraversal<I> {
+impl<I, C> Default for DepthFirstTraversal<I, C>
+where
+    C: Default,
+{
     fn default() -> Self {
         Self {
             queue: ArrayVec::new(),
+            context: C::default(),
         }
     }
 }
@@ -414,16 +421,17 @@ trait NodeIter<'a, const DIM: usize, const BRANCH: u32>
 where
     Self: Iterator<Item = (NodeCoords<DIM, BRANCH>, &'a Node)>,
 {
-    fn new(coords: NodeCoords<DIM, BRANCH>, children: &'a [Node]) -> Self;
+    type Context;
+    fn new(context: &Self::Context, coords: NodeCoords<DIM, BRANCH>, children: &'a [Node]) -> Self;
 }
 
-struct DepthFirstQueueEntry<'a, const DIM: usize, const BRANCH: u32> {
+struct AllChildren<'a, const DIM: usize, const BRANCH: u32> {
     coords: NodeCoords<DIM, BRANCH>,
     children: &'a [Node],
     index: usize,
 }
 
-impl<'a, const DIM: usize, const BRANCH: u32> Iterator for DepthFirstQueueEntry<'a, DIM, BRANCH> {
+impl<'a, const DIM: usize, const BRANCH: u32> Iterator for AllChildren<'a, DIM, BRANCH> {
     type Item = (NodeCoords<DIM, BRANCH>, &'a Node);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -435,9 +443,11 @@ impl<'a, const DIM: usize, const BRANCH: u32> Iterator for DepthFirstQueueEntry<
 }
 
 impl<'a, const DIM: usize, const BRANCH: u32> NodeIter<'a, DIM, BRANCH>
-    for DepthFirstQueueEntry<'a, DIM, BRANCH>
+    for AllChildren<'a, DIM, BRANCH>
 {
-    fn new(coords: NodeCoords<DIM, BRANCH>, children: &'a [Node]) -> Self {
+    type Context = ();
+
+    fn new(&(): &(), coords: NodeCoords<DIM, BRANCH>, children: &'a [Node]) -> Self {
         Self {
             coords,
             children,
@@ -449,7 +459,7 @@ impl<'a, const DIM: usize, const BRANCH: u32> NodeIter<'a, DIM, BRANCH>
 pub struct Intersections<'a, const DIM: usize, const BRANCH: u32, T> {
     bounds: &'a Rect<DIM>,
     elements: &'a Slab<Element<T>>,
-    traversal: DepthFirstTraversal<DepthFirstQueueEntry<'a, DIM, BRANCH>>,
+    traversal: DepthFirstTraversal<AllChildren<'a, DIM, BRANCH>, ()>,
     next_element: Option<usize>,
 }
 
