@@ -496,6 +496,24 @@ mod tests {
     }
 
     #[test]
+    fn index_in_parent() {
+        const BRANCH: u32 = 3;
+        let origin = BRANCH * 7;
+        for y in 0..BRANCH {
+            for x in 0..BRANCH {
+                assert_eq!(
+                    NodeCoords::<2, BRANCH>::from_point(
+                        [(origin + x).into(), (origin + y).into()],
+                        0
+                    )
+                    .index_in_parent(),
+                    (y * BRANCH + x) as usize
+                );
+            }
+        }
+    }
+
+    #[test]
     fn smoke() {
         let mut t = SieveTree::<2, 4, Rect<2>>::new();
         t.insert(Rect {
