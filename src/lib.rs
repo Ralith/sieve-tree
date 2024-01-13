@@ -56,19 +56,6 @@ impl<const DIM: usize, const BRANCH: u32, T> SieveTree<DIM, BRANCH, T> {
         Some(&mut self.elements.get_mut(id)?.value)
     }
 
-    fn depth_first(&self) -> DepthFirstTraversal<AllChildren<'_, DIM, BRANCH>, ()> {
-        DepthFirstTraversal {
-            context: (),
-            queue: [AllChildren {
-                coords: self.root_coords,
-                children: self.root.children.as_ref().map_or(&[], |x| x),
-                index: 0,
-            }]
-            .into_iter()
-            .collect(),
-        }
-    }
-
     /// Traverse all elements in nodes that intersect with `bounds`
     pub fn intersections(&self, bounds: Rect<DIM>) -> Intersections<'_, DIM, BRANCH, T> {
         let mut out = Intersections {
@@ -220,6 +207,7 @@ impl<const DIM: usize, const BRANCH: u32> NodeCoords<DIM, BRANCH> {
             .sum()
     }
 
+    #[allow(dead_code)]
     fn child(&self, index: usize) -> Option<Self> {
         let level = self.level.checked_sub(1)?;
         let extent = node_extent::<BRANCH>(level);
@@ -453,37 +441,6 @@ where
 {
     type Context;
     fn new(context: &Self::Context, coords: NodeCoords<DIM, BRANCH>, children: &'a [Node]) -> Self;
-}
-
-struct AllChildren<'a, const DIM: usize, const BRANCH: u32> {
-    coords: NodeCoords<DIM, BRANCH>,
-    children: &'a [Node],
-    index: usize,
-}
-
-impl<'a, const DIM: usize, const BRANCH: u32> Iterator for AllChildren<'a, DIM, BRANCH> {
-    type Item = (NodeCoords<DIM, BRANCH>, &'a Node);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let child = self.children.get(self.index)?;
-        let child_coords = self.coords.child(self.index).unwrap();
-        self.index += 1;
-        Some((child_coords, child))
-    }
-}
-
-impl<'a, const DIM: usize, const BRANCH: u32> NodeIter<'a, DIM, BRANCH>
-    for AllChildren<'a, DIM, BRANCH>
-{
-    type Context = ();
-
-    fn new(&(): &(), coords: NodeCoords<DIM, BRANCH>, children: &'a [Node]) -> Self {
-        Self {
-            coords,
-            children,
-            index: 0,
-        }
-    }
 }
 
 struct IntersectingChildren<'a, const DIM: usize, const BRANCH: u32> {
