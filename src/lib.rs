@@ -252,8 +252,8 @@ impl<const DIM: usize, const BRANCH: u32> NodeCoords<DIM, BRANCH> {
     }
 
     fn index_in_parent(&self) -> usize {
-        let parent_extent = node_extent::<BRANCH>(self.level + 1);
-        let local_coords = self.min.map(|x| x % parent_extent);
+        let extent = node_extent::<BRANCH>(self.level);
+        let local_coords = self.min.map(|x| (x / extent) % BRANCH as u64);
         local_coords
             .into_iter()
             .enumerate()
@@ -633,7 +633,7 @@ mod tests {
     }
 
     #[test]
-    fn index_in_parent() {
+    fn index_in_parent_leaf() {
         const BRANCH: u32 = 3;
         let origin = BRANCH * 7;
         for y in 0..BRANCH {
@@ -648,6 +648,11 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn index_in_parent_mid() {
+        assert_eq!(NodeCoords::<1, 2>::from_point([5], 2).index_in_parent(), 1);
     }
 
     #[test]
