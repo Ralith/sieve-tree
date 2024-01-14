@@ -10,8 +10,7 @@ use slab::Slab;
 
 #[derive(Debug)]
 pub struct SieveTree<const DIM: usize, const BRANCH: u32, T> {
-    root_coords: NodeCoords<DIM, BRANCH>,
-    root: Node,
+    root: Option<(NodeCoords<DIM, BRANCH>, Node)>,
     elements: Slab<Element<T>>,
 }
 
@@ -28,7 +27,10 @@ impl<const DIM: usize, const BRANCH: u32, T> SieveTree<DIM, BRANCH, T> {
         let id = self.elements.insert(Element { value, next: None });
 
         let loc = bounds.location::<BRANCH>();
-        let node = find_smallest_parent::<DIM, BRANCH>(&mut self.root_coords, &mut self.root, loc);
+        let node = match &mut self.root {
+            None => &mut self.root.insert((loc, Node::default())).1,
+            Some((coords, root)) => find_smallest_parent::<DIM, BRANCH>(coords, root, loc),
+        };
         link(&mut self.elements, node, id);
 
         id
@@ -40,7 +42,9 @@ impl<const DIM: usize, const BRANCH: u32, T> SieveTree<DIM, BRANCH, T> {
         T: Bounded<DIM>,
     {
         let mut stack = alloc::vec::Vec::<(NodeCoords<DIM, BRANCH>, &mut Node)>::new();
-        stack.push((self.root_coords, &mut self.root));
+        if let Some((coords, ref mut root)) = self.root {
+            stack.push((coords, root));
+        }
         while let Some((coords, node)) = stack.pop() {
             // Balance elements in current node
             if node.elements > elements_per_node {
@@ -85,17 +89,18 @@ impl<const DIM: usize, const BRANCH: u32, T> SieveTree<DIM, BRANCH, T> {
         T: Bounded<DIM>,
     {
         let elt = self.elements.remove(id);
+        let (coords, root) = self.root.as_mut().unwrap();
         let node = find_smallest_parent::<DIM, BRANCH>(
-            &mut self.root_coords,
-            &mut self.root,
+            coords,
+            root,
             elt.value.bounds().location::<BRANCH>(),
         );
         unlink(&mut self.elements, node, id);
         elt.value
     }
 
-    pub fn bounds(&self) -> Rect<DIM> {
-        self.root_coords.bounds()
+    pub fn bounds(&self) -> Option<Rect<DIM>> {
+        self.root.as_ref().map(|(coords, _)| coords.bounds())
     }
 
     pub fn get(&self, id: usize) -> Option<&T> {
@@ -113,19 +118,17 @@ impl<const DIM: usize, const BRANCH: u32, T> SieveTree<DIM, BRANCH, T> {
             traversal: DepthFirstTraversal::default(),
             next_element: None,
         };
-        if let Some(children) = self.root.children.as_ref() {
-            if bounds.intersects(&self.root_coords.bounds()) {
-                out.next_element = self.root.first_element;
-                out.traversal = DepthFirstTraversal {
-                    queue: [IntersectingChildren::new(
-                        &bounds,
-                        self.root_coords,
-                        children,
-                    )]
-                    .into_iter()
-                    .collect(),
-                    context: bounds,
-                };
+        if let Some((coords, ref node)) = self.root {
+            if bounds.intersects(&coords.bounds()) {
+                out.next_element = node.first_element;
+                if let Some(children) = node.children.as_ref() {
+                    out.traversal = DepthFirstTraversal {
+                        queue: [IntersectingChildren::new(&bounds, coords, children)]
+                            .into_iter()
+                            .collect(),
+                        context: bounds,
+                    };
+                }
             }
         }
         out
@@ -135,11 +138,7 @@ impl<const DIM: usize, const BRANCH: u32, T> SieveTree<DIM, BRANCH, T> {
 impl<const DIM: usize, const BRANCH: u32, T> Default for SieveTree<DIM, BRANCH, T> {
     fn default() -> Self {
         Self {
-            root_coords: NodeCoords {
-                level: 0,
-                min: [0; DIM],
-            },
-            root: Node::default(),
+            root: None,
             elements: Slab::default(),
         }
     }
