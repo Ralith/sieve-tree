@@ -153,10 +153,11 @@ fn find_smallest_parent<'a, const DIM: usize, const BRANCH: u32>(
 ) -> &'a mut Node {
     let ancestor = root_coords.smallest_common_ancestor(&target);
     if ancestor != *root_coords {
-        // Create new root, reattach the old root under it, then return the new root
+        // Create new root that encloses both old root and target
         let old_root = mem::take(root);
         let old_root_coords = mem::replace(root_coords, ancestor);
 
+        // Reattach the old root under the new root
         let mut current = &mut *root;
         let mut current_level = root_coords.level;
         while current_level > old_root_coords.level {
@@ -167,7 +168,14 @@ fn find_smallest_parent<'a, const DIM: usize, const BRANCH: u32>(
         }
         *current = old_root;
 
-        return root;
+        if target.level < ancestor.level {
+            // Return the child of the new root that encloses `target`
+            let child = NodeCoords::<DIM, BRANCH>::from_point(target.min, root_coords.level - 1);
+            return &mut root.children.as_mut().unwrap()[child.index_in_parent()];
+        } else {
+            // Ancestor is target
+            return root;
+        }
     }
 
     // Find smallest enclosing node that already exists
