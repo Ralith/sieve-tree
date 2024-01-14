@@ -41,44 +41,59 @@ impl<const DIM: usize, const BRANCH: u32, T> SieveTree<DIM, BRANCH, T> {
     where
         T: Bounded<DIM>,
     {
-        let mut stack = alloc::vec::Vec::<(NodeCoords<DIM, BRANCH>, &mut Node)>::new();
-        if let Some((coords, ref mut root)) = self.root {
-            stack.push((coords, root));
-        }
-        while let Some((coords, node)) = stack.pop() {
-            // Balance elements in current node
-            if node.elements > elements_per_node {
-                let children = ensure_children::<DIM, BRANCH>(&mut node.children);
-                let mut next_elt = node.first_element;
-                let mut prev_elt = None;
-                while let Some(element) = next_elt {
-                    next_elt = self.elements[element].next;
-                    let bounds = self.elements[element].value.bounds();
-                    let Some(child_coords) = bounds.location_in::<BRANCH>(coords.level - 1) else {
-                        // Too large to move into children
-                        prev_elt = Some(element);
-                        continue;
-                    };
-                    // Link into child
-                    link(
-                        &mut self.elements,
-                        &mut children[child_coords.index_in_parent()],
-                        element,
-                    );
-                    // Unlink from `node`
-                    let prev_link = match prev_elt {
-                        None => &mut node.first_element,
-                        Some(x) => &mut self.elements[x].next,
-                    };
-                    node.elements -= 1;
-                    *prev_link = next_elt;
-                }
+        fn split<const DIM: usize, const BRANCH: u32, T: Bounded<DIM>>(
+            elements: &mut Slab<Element<T>>,
+            coords: NodeCoords<DIM, BRANCH>,
+            node: &mut Node,
+        ) {
+            let children = ensure_children::<DIM, BRANCH>(&mut node.children);
+            let mut next_elt = node.first_element;
+            let mut prev_elt = None;
+            while let Some(element) = next_elt {
+                next_elt = elements[element].next;
+                let bounds = elements[element].value.bounds();
+                let Some(child_coords) = bounds.location_in::<BRANCH>(coords.level - 1) else {
+                    // Too large to move into children
+                    prev_elt = Some(element);
+                    continue;
+                };
+                // Link into child
+                link(
+                    elements,
+                    &mut children[child_coords.index_in_parent()],
+                    element,
+                );
+                // Unlink from `node`
+                let prev_link = match prev_elt {
+                    None => &mut node.first_element,
+                    Some(x) => &mut elements[x].next,
+                };
+                *prev_link = next_elt;
+                node.elements -= 1;
             }
+        }
 
-            // Queue child nodes for balancing
-            if let Some(children) = node.children.as_mut() {
-                for (i, child) in children.iter_mut().enumerate() {
-                    stack.push((coords.child(i).unwrap(), child));
+        // See comment on `DepthFirstTraversal::queue`
+        let mut stack = ArrayVec::<(NodeCoords<DIM, BRANCH>, &mut [Node]), MAX_DEPTH>::new();
+        if let Some((coords, ref mut root)) = self.root {
+            if root.elements > elements_per_node {
+                split(&mut self.elements, coords, root);
+            }
+            if let Some(children) = root.children.as_mut() {
+                stack.push((coords, children));
+            }
+        }
+        while let Some((coords, children)) = stack.pop() {
+            for (i, child) in children.iter_mut().enumerate() {
+                let child_coords = coords.child(i).unwrap();
+                // Balance elements in `child`
+                if child.elements > elements_per_node {
+                    split(&mut self.elements, child_coords, child);
+                }
+
+                // Queue grandchildren for balancing
+                if let Some(grandchildren) = child.children.as_mut() {
+                    stack.push((child_coords, grandchildren));
                 }
             }
         }
@@ -470,6 +485,9 @@ impl<const DIM: usize> Bounded<DIM> for Rect<DIM> {
 }
 
 struct DepthFirstTraversal<ChildIter, Context> {
+    // By tracking groups of children, rather than individual nodes, we can keep the stack size
+    // to O(depth), whereas a naive depth-first traversal would require O(depth * branch^dim).
+    //
     // `MAX_DEPTH` should be computed from `BRANCH` once Rust permits that
     queue: ArrayVec<ChildIter, MAX_DEPTH>,
     context: Context,
