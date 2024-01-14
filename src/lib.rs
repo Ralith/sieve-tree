@@ -52,17 +52,13 @@ impl<const DIM: usize, const BRANCH: u32, T> SieveTree<DIM, BRANCH, T> {
             while let Some(element) = next_elt {
                 next_elt = elements[element].next;
                 let bounds = elements[element].value.bounds();
-                let Some(child_coords) = bounds.location_in::<BRANCH>(coords.level - 1) else {
+                let Some(index) = bounds.index_in::<BRANCH>(coords.level - 1) else {
                     // Too large to move into children
                     prev_elt = Some(element);
                     continue;
                 };
                 // Link into child
-                link(
-                    elements,
-                    &mut children[child_coords.index_in_parent()],
-                    element,
-                );
+                link(elements, &mut children[index], element);
                 // Unlink from `node`
                 let prev_link = match prev_elt {
                     None => &mut node.first_element,
@@ -177,15 +173,15 @@ fn find_smallest_parent<'a, const DIM: usize, const BRANCH: u32>(
         while current_level > old_root_coords.level {
             let children = ensure_children::<DIM, BRANCH>(&mut current.children);
             current_level -= 1;
-            let coords = NodeCoords::<DIM, BRANCH>::from_point(old_root_coords.min, current_level);
-            current = &mut children[coords.index_in_parent()];
+            let index = child_index_at_level::<DIM, BRANCH>(old_root_coords.min, current_level);
+            current = &mut children[index];
         }
         *current = old_root;
 
         if target.level < ancestor.level {
             // Return the child of the new root that encloses `target`
-            let child = NodeCoords::<DIM, BRANCH>::from_point(target.min, root_coords.level - 1);
-            return &mut root.children.as_mut().unwrap()[child.index_in_parent()];
+            let index = child_index_at_level::<DIM, BRANCH>(target.min, root_coords.level - 1);
+            return &mut root.children.as_mut().unwrap()[index];
         } else {
             // Ancestor is target
             return root;
@@ -201,12 +197,10 @@ fn find_smallest_parent<'a, const DIM: usize, const BRANCH: u32>(
                 break;
             }
             current_level -= 1;
-            let child_coords = NodeCoords::<DIM, BRANCH>::from_point(target.min, current_level);
+            let index = child_index_at_level::<DIM, BRANCH>(target.min, current_level);
             // Hack around borrowck limitation
             unsafe {
-                current = mem::transmute::<&mut Node, &'a mut Node>(
-                    &mut children[child_coords.index_in_parent()],
-                );
+                current = mem::transmute::<&mut Node, &'a mut Node>(&mut children[index]);
             }
         }
     }
@@ -390,6 +384,22 @@ const fn node_extent<const BRANCH: u32>(level: u32) -> u64 {
     (BRANCH as u64).saturating_pow(level)
 }
 
+/// Compute the index of the node at `level` containing `point` in its parent's child array
+///
+/// Equivalent to `NodeCoords::from_point(point, level).index_in_parent()`
+fn child_index_at_level<const DIM: usize, const BRANCH: u32>(
+    point: [u64; DIM],
+    level: u32,
+) -> usize {
+    let extent = node_extent::<BRANCH>(level);
+    let local_coords = point.map(|x| (x / extent) % BRANCH as u64);
+    local_coords
+        .into_iter()
+        .enumerate()
+        .map(|(i, x)| x as usize * (BRANCH as usize).pow(i as u32))
+        .sum()
+}
+
 pub trait Bounded<const DIM: usize> {
     fn bounds(&self) -> Rect<DIM>;
 }
@@ -435,21 +445,25 @@ impl<const DIM: usize> Rect<DIM> {
         NodeCoords::from_point(self.min, level)
     }
 
-    /// Find the node at `level` which a value with these bounds should be stored in, or `None` if
-    /// the value must be stored at a higher level
-    fn location_in<const BRANCH: u32>(&self, level: u32) -> Option<NodeCoords<DIM, BRANCH>> {
-        let Some(extent) = self.extents().into_iter().max() else {
+    /// Compute the index of the node at `level` containing this rect in its parent's child array,
+    /// or `None` if the value must be stored at a higher level
+    fn index_in<const BRANCH: u32>(&self, level: u32) -> Option<usize> {
+        let Some(max_extent) = self.extents().into_iter().max() else {
             // 0-dimensional case
-            return Some(NodeCoords {
-                level,
-                min: [0; DIM],
-            });
+            return Some(0);
         };
-
-        if extent > node_extent::<BRANCH>(level + 1) {
+        let level_extent = node_extent::<BRANCH>(level);
+        if max_extent > level_extent * u64::from(BRANCH) {
             return None;
         }
-        Some(NodeCoords::from_point(self.min, level))
+        let local_coords = self.min.map(|x| (x / level_extent) % BRANCH as u64);
+        Some(
+            local_coords
+                .into_iter()
+                .enumerate()
+                .map(|(i, x)| x as usize * (BRANCH as usize).pow(i as u32))
+                .sum(),
+        )
     }
 
     pub fn intersects(&self, other: &Self) -> bool {
