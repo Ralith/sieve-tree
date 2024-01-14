@@ -400,12 +400,12 @@ fn child_index_at_level<const DIM: usize, const BRANCH: u32>(
         .sum()
 }
 
+// `DIM` should probably be an associated constant, but we can't use those in array lengths yet.
 pub trait Bounded<const DIM: usize> {
     fn bounds(&self) -> Rect<DIM>;
 }
 
 /// An axis-aligned bounding box
-// `DIM` should probably be an associated constant, but we can't use those in array lengths yet.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub struct Rect<const DIM: usize> {
     /// Smallest point inside the box
