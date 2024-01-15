@@ -8,6 +8,7 @@ use core::{array, fmt, mem};
 use arrayvec::ArrayVec;
 use slab::Slab;
 
+/// A `DIM`-dimensional spatial search tree with a branching factor of `BRANCH.pow(DIM)`
 #[derive(Debug)]
 pub struct SieveTree<const DIM: usize, const BRANCH: u32, T> {
     root: Option<(NodeCoords<DIM, BRANCH>, Node)>,
@@ -15,10 +16,13 @@ pub struct SieveTree<const DIM: usize, const BRANCH: u32, T> {
 }
 
 impl<const DIM: usize, const BRANCH: u32, T> SieveTree<DIM, BRANCH, T> {
+    /// Create an empty tree
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Insert `value` into the best existing location in the tree, returning an ID that can be used
+    /// to access it directly
     pub fn insert(&mut self, value: T) -> usize
     where
         T: Bounded<DIM>,
@@ -36,7 +40,9 @@ impl<const DIM: usize, const BRANCH: u32, T> SieveTree<DIM, BRANCH, T> {
         id
     }
 
-    /// Split nodes with more than `elements_per_node`
+    /// Recursively split nodes with more than `elements_per_node` elements
+    ///
+    /// Call after large numbers of `insert`s to maintain consistent search performance.
     pub fn balance(&mut self, elements_per_node: usize)
     where
         T: Bounded<DIM>,
@@ -95,6 +101,7 @@ impl<const DIM: usize, const BRANCH: u32, T> SieveTree<DIM, BRANCH, T> {
         }
     }
 
+    /// Remove the value associated with `id`
     pub fn remove(&mut self, id: usize) -> T
     where
         T: Bounded<DIM>,
@@ -122,7 +129,7 @@ impl<const DIM: usize, const BRANCH: u32, T> SieveTree<DIM, BRANCH, T> {
         Some(&mut self.elements.get_mut(id)?.value)
     }
 
-    /// Traverse all elements in nodes that intersect with `bounds`
+    /// Traverse all elements that might intersect with `bounds`
     pub fn intersections(&self, bounds: Rect<DIM>) -> Intersections<'_, DIM, BRANCH, T> {
         let mut out = Intersections {
             elements: &self.elements,
@@ -572,6 +579,7 @@ impl<'a, const DIM: usize, const BRANCH: u32> NodeIter<'a, DIM, BRANCH>
     }
 }
 
+/// Iterator over nodes that might intersect with a [`Rect`]
 pub struct Intersections<'a, const DIM: usize, const BRANCH: u32, T> {
     elements: &'a Slab<Element<T>>,
     traversal: DepthFirstTraversal<IntersectingChildren<'a, DIM, BRANCH>, Rect<DIM>>,
