@@ -201,7 +201,10 @@ impl<const DIM: usize, const BRANCH: u32, T> SieveTree<DIM, BRANCH, T> {
             .embedding
             .bounds_from_world(self.scale, &bounds)
             .location::<BRANCH>();
-        let node = find_smallest_parent::<DIM, BRANCH>(root, target);
+        // A value is guaranteed to be stored in the smallest existing node permitted for it, because:
+        // - `insert` only introduces nodes that are siblings of or larger than the root
+        // - `balance` always moves all possible elements into newly created child nodes
+        let node = find_smallest_existing_parent::<DIM, BRANCH>(root, target);
         unlink(&mut self.elements, node, id);
         elt.value
     }
@@ -271,38 +274,43 @@ impl<const DIM: usize, const BRANCH: u32> Root<DIM, BRANCH> {
 }
 
 /// Look up the smallest existing parent of `target`, uprooting the tree if necessary
-fn find_smallest_parent<'a, const DIM: usize, const BRANCH: u32>(
+fn find_smallest_parent<const DIM: usize, const BRANCH: u32>(
+    root: &mut Root<DIM, BRANCH>,
+    target: NodeCoords<DIM, BRANCH>,
+) -> &mut Node {
+    let ancestor = root.coords.smallest_common_ancestor(&target);
+    if ancestor == root.coords {
+        return find_smallest_existing_parent(root, target);
+    }
+    // Create new root that encloses both old root and target
+    let old_root = mem::take(&mut root.node);
+    let old_root_coords = mem::replace(&mut root.coords, ancestor);
+
+    // Reattach the old root under the new root
+    let mut current = &mut root.node;
+    let mut current_level = root.coords.level;
+    while current_level > old_root_coords.level {
+        let children = ensure_children::<DIM, BRANCH>(&mut current.children);
+        current_level -= 1;
+        let index = child_index_at_level::<DIM, BRANCH>(old_root_coords.min, current_level);
+        current = &mut children[index];
+    }
+    *current = old_root;
+
+    if target.level < ancestor.level {
+        // Return the child of the new root that encloses `target`
+        let index = child_index_at_level::<DIM, BRANCH>(target.min, root.coords.level - 1);
+        &mut root.node.children.as_mut().unwrap()[index]
+    } else {
+        // Ancestor is target
+        &mut root.node
+    }
+}
+
+fn find_smallest_existing_parent<'a, const DIM: usize, const BRANCH: u32>(
     root: &'a mut Root<DIM, BRANCH>,
     target: NodeCoords<DIM, BRANCH>,
 ) -> &'a mut Node {
-    let ancestor = root.coords.smallest_common_ancestor(&target);
-    if ancestor != root.coords {
-        // Create new root that encloses both old root and target
-        let old_root = mem::take(&mut root.node);
-        let old_root_coords = mem::replace(&mut root.coords, ancestor);
-
-        // Reattach the old root under the new root
-        let mut current = &mut root.node;
-        let mut current_level = root.coords.level;
-        while current_level > old_root_coords.level {
-            let children = ensure_children::<DIM, BRANCH>(&mut current.children);
-            current_level -= 1;
-            let index = child_index_at_level::<DIM, BRANCH>(old_root_coords.min, current_level);
-            current = &mut children[index];
-        }
-        *current = old_root;
-
-        if target.level < ancestor.level {
-            // Return the child of the new root that encloses `target`
-            let index = child_index_at_level::<DIM, BRANCH>(target.min, root.coords.level - 1);
-            return &mut root.node.children.as_mut().unwrap()[index];
-        } else {
-            // Ancestor is target
-            return &mut root.node;
-        }
-    }
-
-    // Find smallest enclosing node that already exists
     let mut current = &mut root.node;
     let mut current_level = root.coords.level;
     {
