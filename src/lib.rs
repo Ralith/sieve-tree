@@ -317,21 +317,15 @@ impl<const DIM: usize, const BRANCH: u32> NodeCoords<DIM, BRANCH> {
 
 impl<const DIM: usize, const BRANCH: u32> fmt::Display for NodeCoords<DIM, BRANCH> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for level in (0..=self.level).rev() {
-            let extent = node_extent::<BRANCH>(level);
-            if level != 0 {
-                write!(f, ".")?;
+        let extent = node_extent::<BRANCH>(self.level);
+        write!(f, "{}:[", self.level)?;
+        for (i, x) in self.min.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?;
             }
-            write!(f, "(")?;
-            for (i, x) in self.min.into_iter().enumerate() {
-                if i != 0 {
-                    write!(f, ",")?;
-                }
-                write!(f, "{}", x / extent)?;
-            }
-            write!(f, ")")?;
+            write!(f, "{}", x / extent)?;
         }
-        Ok(())
+        write!(f, "]")
     }
 }
 
