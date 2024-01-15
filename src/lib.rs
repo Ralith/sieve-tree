@@ -728,10 +728,7 @@ pub struct Intersections<'a, const DIM: usize, const BRANCH: u32, T> {
     next_element: Option<usize>,
 }
 
-impl<'a, const DIM: usize, const BRANCH: u32, T> Iterator for Intersections<'a, DIM, BRANCH, T>
-where
-    T: Bounded<DIM>,
-{
+impl<'a, const DIM: usize, const BRANCH: u32, T> Iterator for Intersections<'a, DIM, BRANCH, T> {
     type Item = (usize, &'a T);
 
     fn next(&mut self) -> Option<Self::Item> {
