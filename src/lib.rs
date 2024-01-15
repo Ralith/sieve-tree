@@ -56,7 +56,7 @@ impl<const DIM: usize, const BRANCH: u32, T> SieveTree<DIM, BRANCH, T> {
                     .max();
                 let coords = NodeCoords {
                     min: [0; DIM],
-                    level: extent.map_or(0, |x| x.ilog(BRANCH as u64)),
+                    level: extent.map_or(0, level_for_extent::<BRANCH>),
                 };
                 &mut self
                     .root
@@ -538,6 +538,11 @@ fn child_index_at_level<const DIM: usize, const BRANCH: u32>(
         .sum()
 }
 
+/// Compute the lowest level a value with maximum bounding box edge length `extent` may occupy
+fn level_for_extent<const BRANCH: u32>(extent: u64) -> u32 {
+    extent.ilog(BRANCH as u64)
+}
+
 /// An axis-aligned bounding box in world space
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct Bounds<const DIM: usize> {
@@ -581,7 +586,7 @@ impl<const DIM: usize> TreeBounds<DIM> {
             };
         };
 
-        let level = extent.ilog(BRANCH as u64);
+        let level = level_for_extent::<BRANCH>(extent);
         NodeCoords::from_point(self.min, level)
     }
 
