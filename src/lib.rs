@@ -125,10 +125,10 @@ impl<const DIM: usize, const BRANCH: u32, T> SieveTree<DIM, BRANCH, T> {
             scale: f64,
             embedding: &Embedding<DIM>,
             elements: &mut Slab<Element<T>>,
-            coords: NodeCoords<DIM, BRANCH>,
+            level: u32,
             node: &mut Node,
         ) {
-            if coords.level == 0 {
+            if level == 0 {
                 return;
             }
             let children = ensure_children::<DIM, BRANCH>(&mut node.children);
@@ -137,7 +137,7 @@ impl<const DIM: usize, const BRANCH: u32, T> SieveTree<DIM, BRANCH, T> {
             while let Some(element) = next_elt {
                 next_elt = elements[element].next;
                 let bounds = embedding.bounds_from_world(scale, &elements[element].value.bounds());
-                let Some(index) = bounds.index_in::<BRANCH>(coords.level - 1) else {
+                let Some(index) = bounds.index_in::<BRANCH>(level - 1) else {
                     // Too large to move into children
                     prev_elt = Some(element);
                     continue;
@@ -156,36 +156,36 @@ impl<const DIM: usize, const BRANCH: u32, T> SieveTree<DIM, BRANCH, T> {
 
         if let Some(root) = &mut self.root {
             // See comment on `DepthFirstTraversal::queue`
-            let mut stack = ArrayVec::<(NodeCoords<DIM, BRANCH>, &mut [Node]), MAX_DEPTH>::new();
+            let mut stack = ArrayVec::<(u32, &mut [Node]), MAX_DEPTH>::new();
             if root.node.elements > elements_per_node {
-                split(
+                split::<DIM, BRANCH, T>(
                     self.scale,
                     &root.embedding,
                     &mut self.elements,
-                    root.coords,
+                    root.coords.level,
                     &mut root.node,
                 );
             }
             if let Some(children) = root.node.children.as_mut() {
-                stack.push((root.coords, children));
+                stack.push((root.coords.level, children));
             }
-            while let Some((coords, children)) = stack.pop() {
-                for (i, child) in children.iter_mut().enumerate() {
-                    let child_coords = coords.child(i).unwrap();
+            while let Some((level, children)) = stack.pop() {
+                let level = level - 1;
+                for child in children.iter_mut() {
                     // Balance elements in `child`
                     if child.elements > elements_per_node {
-                        split(
+                        split::<DIM, BRANCH, T>(
                             self.scale,
                             &root.embedding,
                             &mut self.elements,
-                            child_coords,
+                            level,
                             child,
                         );
                     }
 
                     // Queue grandchildren for balancing
                     if let Some(grandchildren) = child.children.as_mut() {
-                        stack.push((child_coords, grandchildren));
+                        stack.push((level, grandchildren));
                     }
                 }
             }
@@ -417,18 +417,6 @@ impl<const DIM: usize, const BRANCH: u32> NodeCoords<DIM, BRANCH> {
             .enumerate()
             .map(|(i, x)| x as usize * (BRANCH as usize).pow(i as u32))
             .sum()
-    }
-
-    fn child(&self, index: usize) -> Option<Self> {
-        let level = self.level.checked_sub(1)?;
-        let extent = node_extent::<BRANCH>(level);
-        Some(Self {
-            level,
-            min: array::from_fn(|i| {
-                let offset = (index as u64 / (BRANCH as u64).pow(i as u32)) % BRANCH as u64;
-                self.min[i] + offset * extent
-            }),
-        })
     }
 
     fn children_overlapping(&self, bounds: &TreeBounds<DIM>) -> Option<NodesWithin<DIM, BRANCH>> {
@@ -899,22 +887,17 @@ mod tests {
 
     fn nodes<const DIM: usize, const BRANCH: u32, T>(
         tree: &SieveTree<DIM, BRANCH, T>,
-    ) -> impl Iterator<Item = (NodeCoords<DIM, BRANCH>, &'_ Node)> {
+    ) -> impl Iterator<Item = (u32, &'_ Node)> {
         let mut stack = alloc::vec::Vec::new();
         if let Some(root) = &tree.root {
-            stack.push((root.coords, &root.node));
+            stack.push((root.coords.level, &root.node));
         }
         core::iter::from_fn(move || {
-            let (coords, node) = stack.pop()?;
+            let (level, node) = stack.pop()?;
             if let Some(children) = node.children.as_ref() {
-                stack.extend(
-                    children
-                        .iter()
-                        .enumerate()
-                        .map(|(i, node)| (coords.child(i).unwrap(), node)),
-                );
+                stack.extend(children.iter().map(|node| (level - 1, node)));
             }
-            Some((coords, node))
+            Some((level, node))
         })
     }
 }
