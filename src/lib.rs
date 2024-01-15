@@ -416,11 +416,6 @@ pub struct Bounds<const DIM: usize> {
 }
 
 impl<const DIM: usize> Bounds<DIM> {
-    pub const ROOT: Self = Self {
-        min: [0; DIM],
-        max: [u64::MAX; DIM],
-    };
-
     /// Construct a rectangle covering a single coordinate
     pub const fn point(p: [u64; DIM]) -> Self {
         Self { min: p, max: p }
