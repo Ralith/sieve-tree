@@ -43,11 +43,7 @@ impl<const DIM: usize, const BRANCH: u32, T> SieveTree<DIM, BRANCH, T> {
 
     /// Insert `value` into the best existing location in the tree, returning an ID that can be used
     /// to access it directly
-    pub fn insert(&mut self, value: T) -> usize
-    where
-        T: Bounded<DIM>,
-    {
-        let bounds = value.bounds();
+    pub fn insert(&mut self, bounds: Bounds<DIM>, value: T) -> usize {
         let id = self.elements.insert(Element { value, next: None });
 
         let node = match &mut self.root {
@@ -117,16 +113,18 @@ impl<const DIM: usize, const BRANCH: u32, T> SieveTree<DIM, BRANCH, T> {
     /// Recursively split nodes with more than `elements_per_node` elements
     ///
     /// Call after large numbers of `insert`s to maintain consistent search performance.
-    pub fn balance(&mut self, elements_per_node: usize)
-    where
-        T: Bounded<DIM>,
-    {
-        fn split<const DIM: usize, const BRANCH: u32, T: Bounded<DIM>>(
+    pub fn balance(
+        &mut self,
+        elements_per_node: usize,
+        mut get_bounds: impl FnMut(&T) -> Bounds<DIM>,
+    ) {
+        fn split<const DIM: usize, const BRANCH: u32, T>(
             scale: f64,
             embedding: &Embedding<DIM>,
             elements: &mut Slab<Element<T>>,
             level: u32,
             node: &mut Node,
+            mut get_bounds: impl FnMut(&T) -> Bounds<DIM>,
         ) {
             if level == 0 {
                 return;
@@ -136,7 +134,8 @@ impl<const DIM: usize, const BRANCH: u32, T> SieveTree<DIM, BRANCH, T> {
             let mut prev_elt = None;
             while let Some(element) = next_elt {
                 next_elt = elements[element].next;
-                let bounds = embedding.bounds_from_world(scale, &elements[element].value.bounds());
+                let bounds =
+                    embedding.bounds_from_world(scale, &get_bounds(&elements[element].value));
                 let Some(index) = bounds.index_in::<BRANCH>(level - 1) else {
                     // Too large to move into children
                     prev_elt = Some(element);
@@ -164,6 +163,7 @@ impl<const DIM: usize, const BRANCH: u32, T> SieveTree<DIM, BRANCH, T> {
                     &mut self.elements,
                     root.coords.level,
                     &mut root.node,
+                    &mut get_bounds,
                 );
             }
             if let Some(children) = root.node.children.as_mut() {
@@ -180,6 +180,7 @@ impl<const DIM: usize, const BRANCH: u32, T> SieveTree<DIM, BRANCH, T> {
                             &mut self.elements,
                             level,
                             child,
+                            &mut get_bounds,
                         );
                     }
 
@@ -193,15 +194,12 @@ impl<const DIM: usize, const BRANCH: u32, T> SieveTree<DIM, BRANCH, T> {
     }
 
     /// Remove the value associated with `id`
-    pub fn remove(&mut self, id: usize) -> T
-    where
-        T: Bounded<DIM>,
-    {
+    pub fn remove(&mut self, bounds: Bounds<DIM>, id: usize) -> T {
         let elt = self.elements.remove(id);
         let root = self.root.as_mut().unwrap();
         let target = root
             .embedding
-            .bounds_from_world(self.scale, &elt.value.bounds())
+            .bounds_from_world(self.scale, &bounds)
             .location::<BRANCH>();
         let node = find_smallest_parent::<DIM, BRANCH>(root, target);
         unlink(&mut self.elements, node, id);
@@ -532,11 +530,6 @@ fn child_index_at_level<const DIM: usize, const BRANCH: u32>(
         .sum()
 }
 
-// `DIM` should probably be an associated constant, but we can't use those in array lengths yet.
-pub trait Bounded<const DIM: usize> {
-    fn bounds(&self) -> Bounds<DIM>;
-}
-
 /// An axis-aligned bounding box in world space
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct Bounds<const DIM: usize> {
@@ -628,12 +621,6 @@ impl<const DIM: usize> Default for TreeBounds<DIM> {
             min: [0; DIM],
             max: [0; DIM],
         }
-    }
-}
-
-impl<const DIM: usize> Bounded<DIM> for Bounds<DIM> {
-    fn bounds(&self) -> Bounds<DIM> {
-        *self
     }
 }
 
@@ -832,10 +819,11 @@ mod tests {
         let mut t = SieveTree::<2, 4, Bounds<2>>::new();
         for y in -5..5 {
             for x in -5..5 {
-                t.insert(Bounds::point([x as f64, y as f64]));
+                let b = Bounds::point([x as f64, y as f64]);
+                t.insert(b, b);
             }
         }
-        t.balance(1);
+        t.balance(1, |&x| x);
         let mut nonempty_nodes = 0;
         for (coords, node) in nodes(&t) {
             assert!(node.elements <= 1, "too many elements at {}", coords);
@@ -851,10 +839,11 @@ mod tests {
     #[test]
     fn smoke() {
         let mut t = SieveTree::<2, 4, Bounds<2>>::new();
-        t.insert(Bounds {
+        let b = Bounds {
             min: [4.0, 4.0],
             max: [107.0, 107.0],
-        });
+        };
+        t.insert(b, b);
         assert_eq!(
             t.intersections(Bounds {
                 min: [0.0, 0.0],
