@@ -60,6 +60,9 @@ impl<const DIM: usize, const BRANCH: u32, T> SieveTree<DIM, BRANCH, T> {
             coords: NodeCoords<DIM, BRANCH>,
             node: &mut Node,
         ) {
+            if coords.level == 0 {
+                return;
+            }
             let children = ensure_children::<DIM, BRANCH>(&mut node.children);
             let mut next_elt = node.first_element;
             let mut prev_elt = None;
