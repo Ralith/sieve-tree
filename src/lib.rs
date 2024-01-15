@@ -117,7 +117,7 @@ impl<const DIM: usize, const BRANCH: u32, T> SieveTree<DIM, BRANCH, T> {
         elt.value
     }
 
-    pub fn bounds(&self) -> Option<Rect<DIM>> {
+    pub fn bounds(&self) -> Option<Bounds<DIM>> {
         self.root.as_ref().map(|(coords, _)| coords.bounds())
     }
 
@@ -130,7 +130,7 @@ impl<const DIM: usize, const BRANCH: u32, T> SieveTree<DIM, BRANCH, T> {
     }
 
     /// Traverse all elements that might intersect with `bounds`
-    pub fn intersections(&self, bounds: Rect<DIM>) -> Intersections<'_, DIM, BRANCH, T> {
+    pub fn intersections(&self, bounds: Bounds<DIM>) -> Intersections<'_, DIM, BRANCH, T> {
         let mut out = Intersections {
             elements: &self.elements,
             traversal: DepthFirstTraversal::default(),
@@ -254,9 +254,9 @@ impl<const DIM: usize, const BRANCH: u32> NodeCoords<DIM, BRANCH> {
         }
     }
 
-    fn bounds(&self) -> Rect<DIM> {
+    fn bounds(&self) -> Bounds<DIM> {
         let extent = node_extent::<BRANCH>(self.level);
-        Rect {
+        Bounds {
             min: self.min,
             max: self.min.map(|x| x + extent - 1),
         }
@@ -288,7 +288,7 @@ impl<const DIM: usize, const BRANCH: u32> NodeCoords<DIM, BRANCH> {
         })
     }
 
-    fn children_overlapping(&self, bounds: &Rect<DIM>) -> Option<NodesWithin<DIM, BRANCH>> {
+    fn children_overlapping(&self, bounds: &Bounds<DIM>) -> Option<NodesWithin<DIM, BRANCH>> {
         let mut range = self.bounds().intersection(bounds);
         let level = self.level.checked_sub(1)?;
         let extent = node_extent::<BRANCH>(level);
@@ -336,9 +336,9 @@ impl<const DIM: usize, const BRANCH: u32> fmt::Display for NodeCoords<DIM, BRANC
     }
 }
 
-/// Iterator over all nodes at a certain level with a min point inside a [`Rect`]
+/// Iterator over all nodes at a certain level with a min point inside a [`Bounds`]
 struct NodesWithin<const DIM: usize, const BRANCH: u32> {
-    range: Rect<DIM>,
+    range: Bounds<DIM>,
     cursor: [u64; DIM],
     level: u32,
 }
@@ -371,7 +371,7 @@ impl<const DIM: usize, const BRANCH: u32> Default for NodesWithin<DIM, BRANCH> {
     /// Construct the empty iterator
     fn default() -> Self {
         Self {
-            range: Rect {
+            range: Bounds {
                 min: [0; DIM],
                 max: [0; DIM],
             },
@@ -403,19 +403,19 @@ fn child_index_at_level<const DIM: usize, const BRANCH: u32>(
 
 // `DIM` should probably be an associated constant, but we can't use those in array lengths yet.
 pub trait Bounded<const DIM: usize> {
-    fn bounds(&self) -> Rect<DIM>;
+    fn bounds(&self) -> Bounds<DIM>;
 }
 
 /// An axis-aligned bounding box
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
-pub struct Rect<const DIM: usize> {
+pub struct Bounds<const DIM: usize> {
     /// Smallest point inside the box
     pub min: [u64; DIM],
     /// Largest point inside the box
     pub max: [u64; DIM],
 }
 
-impl<const DIM: usize> Rect<DIM> {
+impl<const DIM: usize> Bounds<DIM> {
     pub const ROOT: Self = Self {
         min: [0; DIM],
         max: [u64::MAX; DIM],
@@ -432,7 +432,7 @@ impl<const DIM: usize> Rect<DIM> {
     }
 
     /// Find the smallest node that a value with these bounds could be stored in, i.e. the largest
-    /// level with cells smaller than this `Rect`'s extents on any dimension
+    /// level with cells smaller than this `Bounds`'s extents on any dimension
     fn location<const BRANCH: u32>(&self) -> NodeCoords<DIM, BRANCH> {
         let Some(extent) = self.extents().into_iter().max() else {
             // 0-dimensional case
@@ -484,7 +484,7 @@ impl<const DIM: usize> Rect<DIM> {
     }
 }
 
-impl<const DIM: usize> Default for Rect<DIM> {
+impl<const DIM: usize> Default for Bounds<DIM> {
     fn default() -> Self {
         Self {
             min: [0; DIM],
@@ -493,8 +493,8 @@ impl<const DIM: usize> Default for Rect<DIM> {
     }
 }
 
-impl<const DIM: usize> Bounded<DIM> for Rect<DIM> {
-    fn bounds(&self) -> Rect<DIM> {
+impl<const DIM: usize> Bounded<DIM> for Bounds<DIM> {
+    fn bounds(&self) -> Bounds<DIM> {
         *self
     }
 }
@@ -569,9 +569,9 @@ impl<'a, const DIM: usize, const BRANCH: u32> Iterator for IntersectingChildren<
 impl<'a, const DIM: usize, const BRANCH: u32> NodeIter<'a, DIM, BRANCH>
     for IntersectingChildren<'a, DIM, BRANCH>
 {
-    type Context = Rect<DIM>;
+    type Context = Bounds<DIM>;
 
-    fn new(bounds: &Rect<DIM>, coords: NodeCoords<DIM, BRANCH>, children: &'a [Node]) -> Self {
+    fn new(bounds: &Bounds<DIM>, coords: NodeCoords<DIM, BRANCH>, children: &'a [Node]) -> Self {
         Self {
             children,
             inner: coords.children_overlapping(bounds).unwrap(),
@@ -579,10 +579,10 @@ impl<'a, const DIM: usize, const BRANCH: u32> NodeIter<'a, DIM, BRANCH>
     }
 }
 
-/// Iterator over nodes that might intersect with a [`Rect`]
+/// Iterator over nodes that might intersect with a [`Bounds`]
 pub struct Intersections<'a, const DIM: usize, const BRANCH: u32, T> {
     elements: &'a Slab<Element<T>>,
-    traversal: DepthFirstTraversal<IntersectingChildren<'a, DIM, BRANCH>, Rect<DIM>>,
+    traversal: DepthFirstTraversal<IntersectingChildren<'a, DIM, BRANCH>, Bounds<DIM>>,
     next_element: Option<usize>,
 }
 
@@ -690,10 +690,10 @@ mod tests {
 
     #[test]
     fn balance() {
-        let mut t = SieveTree::<2, 4, Rect<2>>::new();
+        let mut t = SieveTree::<2, 4, Bounds<2>>::new();
         for y in 0..10 {
             for x in 0..10 {
-                t.insert(Rect::point([x, y]));
+                t.insert(Bounds::point([x, y]));
             }
         }
         t.balance(1);
@@ -709,13 +709,13 @@ mod tests {
 
     #[test]
     fn smoke() {
-        let mut t = SieveTree::<2, 4, Rect<2>>::new();
-        t.insert(Rect {
+        let mut t = SieveTree::<2, 4, Bounds<2>>::new();
+        t.insert(Bounds {
             min: [4, 4],
             max: [107, 107],
         });
         assert_eq!(
-            t.intersections(Rect {
+            t.intersections(Bounds {
                 min: [0, 0],
                 max: [10, 10]
             })
@@ -723,7 +723,7 @@ mod tests {
             1
         );
         assert_eq!(
-            t.intersections(Rect {
+            t.intersections(Bounds {
                 min: [10, 20],
                 max: [30, 40]
             })
@@ -732,7 +732,7 @@ mod tests {
         );
 
         assert_eq!(
-            t.intersections(Rect {
+            t.intersections(Bounds {
                 min: [1000, 1000],
                 max: [1001, 1001],
             })
