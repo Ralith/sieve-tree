@@ -46,7 +46,7 @@ impl<const DIM: usize, T> SieveTree<DIM, T> {
     pub fn insert(&mut self, bounds: Bounds<DIM>, value: T) -> usize {
         let id = self.elements.insert(Element { value, next: None });
 
-        let node = match &mut self.root {
+        let cell = match &mut self.root {
             None => {
                 let embedding = Embedding { origin: bounds.min };
                 let extent = embedding
@@ -56,16 +56,17 @@ impl<const DIM: usize, T> SieveTree<DIM, T> {
                     .max();
                 let coords = CellCoords {
                     min: [0; DIM],
-                    level: extent.map_or(0, level_for_extent),
+                    level: extent.map_or(0, level_for_extent) + GRID_OFFSET,
                 };
-                &mut self
+                let node = &mut self
                     .root
                     .insert(Root {
                         embedding,
                         coords,
                         node: Node::default(),
                     })
-                    .node
+                    .node;
+                &mut node.grid[0]
             }
             Some(root) => {
                 let current = root.world_bounds(self.scale);
@@ -105,56 +106,70 @@ impl<const DIM: usize, T> SieveTree<DIM, T> {
                 find_smallest_parent::<DIM>(root, target)
             }
         };
-        link(&mut self.elements, node, id);
+        link(&mut self.elements, cell, id);
 
         id
     }
 
-    /// Recursively split nodes with more than `elements_per_node` elements
+    /// Recursively split cells with more than `elements_per_cell` elements
     ///
     /// Call after large numbers of `insert`s to maintain consistent search performance.
     pub fn balance(
         &mut self,
-        elements_per_node: usize,
+        elements_per_cell: usize,
         mut get_bounds: impl FnMut(&T) -> Bounds<DIM>,
     ) {
         let Some(root) = &mut self.root else {
             return;
         };
         let mut split = |level, node: &mut Node<DIM>| {
-            if level == 0 {
+            if level == GRID_OFFSET {
+                // No further subdivision possible
                 return;
             }
-            let children = ensure_children(&mut node.children);
-            let mut next_elt = node.first_element;
-            let mut prev_elt = None;
-            while let Some(element) = next_elt {
-                next_elt = self.elements[element].next;
-                let bounds = root
-                    .embedding
-                    .bounds_from_world(self.scale, &get_bounds(&self.elements[element].value));
-                let Some(index) = bounds.index_in(level - 1) else {
-                    // Too large to move into children
-                    prev_elt = Some(element);
+            let mut any_fresh_split = false;
+            for cell in &mut *node.grid {
+                // Split a cell if it's too large. The first time we allocate children, we visit all
+                // (non-sieved) elements to ensure small values are always in the smallest possible
+                // cell, and don't float around high up in the tree indefinitely.
+                if cell.elements <= elements_per_cell && !any_fresh_split {
                     continue;
-                };
-                // Link into child
-                link(&mut self.elements, &mut children[index], element);
-                // Unlink from `node`
-                let prev_link = match prev_elt {
-                    None => &mut node.first_element,
-                    Some(x) => &mut self.elements[x].next,
-                };
-                *prev_link = next_elt;
-                node.elements -= 1;
+                }
+                let (fresh_split, children) = ensure_children(&mut node.children);
+                any_fresh_split |= fresh_split;
+                let mut next_elt = cell.first_element;
+                let mut prev_elt = None;
+                while let Some(element) = next_elt {
+                    next_elt = self.elements[element].next;
+                    let bounds = root
+                        .embedding
+                        .bounds_from_world(self.scale, &get_bounds(&self.elements[element].value));
+                    let Some(child_node_idx) = bounds.index_in(level - 1) else {
+                        // Too large to move into children
+                        prev_elt = Some(element);
+                        continue;
+                    };
+                    let cell_idx = grid_index_at_level(bounds.min, level - 1);
+                    // Link into child
+                    link(
+                        &mut self.elements,
+                        &mut children[child_node_idx].grid[cell_idx],
+                        element,
+                    );
+                    // Unlink from `node`
+                    let prev_link = match prev_elt {
+                        None => &mut cell.first_element,
+                        Some(x) => &mut self.elements[x].next,
+                    };
+                    *prev_link = next_elt;
+                    cell.elements -= 1;
+                }
             }
         };
 
         // See comment on `DepthFirstTraversal::queue`
         let mut stack = ArrayVec::<(u32, &mut [Node<DIM>]), MAX_DEPTH>::new();
-        if root.node.elements > elements_per_node {
-            split(root.coords.level, &mut root.node);
-        }
+        split(root.coords.level, &mut root.node);
         if let Some(children) = root.node.children.as_mut() {
             stack.push((root.coords.level, children));
         }
@@ -162,9 +177,7 @@ impl<const DIM: usize, T> SieveTree<DIM, T> {
             let level = level - 1;
             for child in children.iter_mut() {
                 // Balance elements in `child`
-                if child.elements > elements_per_node {
-                    split(level, child);
-                }
+                split(level, child);
 
                 // Queue grandchildren for balancing
                 if let Some(grandchildren) = child.children.as_mut() {
@@ -178,15 +191,13 @@ impl<const DIM: usize, T> SieveTree<DIM, T> {
     pub fn remove(&mut self, bounds: Bounds<DIM>, id: usize) -> T {
         let elt = self.elements.remove(id);
         let root = self.root.as_mut().unwrap();
-        let target = root
-            .embedding
-            .bounds_from_world(self.scale, &bounds)
-            .location();
+        let bounds = root.embedding.bounds_from_world(self.scale, &bounds);
+        let target = bounds.location();
         // A value is guaranteed to be stored in the smallest existing node permitted for it, because:
         // - `insert` only introduces nodes that are siblings of or larger than the root
         // - `balance` always moves all possible elements into newly created child nodes
-        let node = find_smallest_existing_parent::<DIM>(root, target);
-        unlink(&mut self.elements, node, id);
+        let cell = find_smallest_existing_parent::<DIM>(root, target);
+        unlink(&mut self.elements, cell, id);
         elt.value
     }
 
@@ -209,12 +220,15 @@ impl<const DIM: usize, T> SieveTree<DIM, T> {
         let mut out = Intersections {
             elements: &self.elements,
             traversal: DepthFirstTraversal::default(),
-            next_element: None,
+            next_cell: CellsWithin::default(),
+            next_element: ElementIter::default(),
+            grid: &[],
         };
         if let Some(ref root) = self.root {
             let bounds = root.embedding.bounds_from_world(self.scale, &bounds);
             if bounds.intersects(&root.coords.bounds()) {
-                out.next_element = root.node.first_element;
+                out.grid = &root.node.grid;
+                out.next_cell = CellsWithin::new(bounds, root.coords.level - GRID_OFFSET);
                 if let Some(children) = root.node.children.as_ref() {
                     out.traversal = DepthFirstTraversal {
                         queue: [IntersectingChildren::new(&bounds, root.coords, children)]
@@ -258,7 +272,7 @@ impl<const DIM: usize> Root<DIM> {
 fn find_smallest_parent<const DIM: usize>(
     root: &mut Root<DIM>,
     target: CellCoords<DIM>,
-) -> &mut Node<DIM> {
+) -> &mut Cell {
     let ancestor = root.coords.smallest_common_ancestor(&target);
     if ancestor == root.coords {
         return find_smallest_existing_parent(root, target);
@@ -271,27 +285,32 @@ fn find_smallest_parent<const DIM: usize>(
     let mut current = &mut root.node;
     let mut current_level = root.coords.level;
     while current_level > old_root_coords.level {
-        let children = ensure_children(&mut current.children);
+        let (_, children) = ensure_children(&mut current.children);
         current_level -= 1;
         let index = child_index_at_level::<DIM>(old_root_coords.min, current_level);
         current = &mut children[index];
     }
     *current = old_root;
 
-    if target.level < ancestor.level {
+    let (level, node) = if target.level < ancestor.level {
         // Return the child of the new root that encloses `target`
         let index = child_index_at_level::<DIM>(target.min, root.coords.level - 1);
-        &mut root.node.children.as_mut().unwrap()[index]
+        (
+            root.coords.level - 1,
+            &mut root.node.children.as_mut().unwrap()[index],
+        )
     } else {
         // Ancestor is target
-        &mut root.node
-    }
+        (root.coords.level, &mut root.node)
+    };
+    let cell_index = grid_index_at_level(target.min, level);
+    &mut node.grid[cell_index]
 }
 
 fn find_smallest_existing_parent<'a, const DIM: usize>(
     root: &'a mut Root<DIM>,
     target: CellCoords<DIM>,
-) -> &'a mut Node<DIM> {
+) -> &'a mut Cell {
     let mut current = &mut root.node;
     let mut current_level = root.coords.level;
     {
@@ -307,28 +326,21 @@ fn find_smallest_existing_parent<'a, const DIM: usize>(
             }
         }
     }
-    current
+    let cell_index = grid_index_at_level(target.min, current_level);
+    &mut current.grid[cell_index]
 }
 
-/// Add `element` to `node`
-fn link<const DIM: usize, T>(
-    elements: &mut Slab<Element<T>>,
-    node: &mut Node<DIM>,
-    element: usize,
-) {
-    let prev = mem::replace(&mut node.first_element, Some(element));
+/// Add `element` to `cell`
+fn link<T>(elements: &mut Slab<Element<T>>, cell: &mut Cell, element: usize) {
+    let prev = mem::replace(&mut cell.first_element, Some(element));
     elements[element].next = prev;
-    node.elements += 1;
+    cell.elements += 1;
 }
 
-/// Remove `element` from `node`
-fn unlink<const DIM: usize, T>(
-    elements: &mut Slab<Element<T>>,
-    node: &mut Node<DIM>,
-    element: usize,
-) {
+/// Remove `element` from `cell`
+fn unlink<T>(elements: &mut Slab<Element<T>>, cell: &mut Cell, element: usize) {
     let successor = elements[element].next;
-    let mut link = &mut node.first_element;
+    let mut link = &mut cell.first_element;
     loop {
         let i = link.expect("element missing from node list");
         if i == element {
@@ -337,7 +349,7 @@ fn unlink<const DIM: usize, T>(
         }
         link = &mut elements[i].next;
     }
-    node.elements -= 1;
+    cell.elements -= 1;
 }
 
 /// Mapping between tree coordinates and world coordinates
@@ -410,18 +422,21 @@ impl<const DIM: usize> CellCoords<DIM> {
         index_from_local_coords(&local_coords, SUBDIV.into())
     }
 
-    fn children_overlapping(&self, bounds: &TreeBounds<DIM>) -> Option<NodesWithin<DIM>> {
-        let mut range = self.bounds().intersection(bounds);
+    fn index_in_grid(&self) -> usize {
+        let extent = cell_extent(self.level);
+        let local_coords = self.min.map(|x| (x / extent) % GRID_SIZE as u64);
+        index_from_local_coords(&local_coords, GRID_SIZE as u64)
+    }
+
+    fn children_overlapping(&self, bounds: &TreeBounds<DIM>) -> Option<CellsWithin<DIM>> {
         let level = self.level.checked_sub(1)?;
         let extent = cell_extent(level);
-        // Clamp lower bound to `level` grid, then subtract one step in each dimension to allow for
-        // edge-crossing
-        range.min = range.min.map(|x| (x - x % extent).saturating_sub(extent));
-        Some(NodesWithin {
-            range,
-            cursor: range.min,
-            level,
-        })
+        // Expand search by one unit towards the origin to allow for edge-crossing
+        let bounds = bounds.relax(extent);
+        let mut range = self.bounds().intersection(&bounds);
+        // Clamp lower bound to node boundaries
+        range.min = range.min.map(|x| x - x % extent);
+        Some(CellsWithin::new(range, level))
     }
 
     fn smallest_common_ancestor(&self, other: &Self) -> Self {
@@ -459,13 +474,24 @@ impl<const DIM: usize> fmt::Display for CellCoords<DIM> {
 }
 
 /// Iterator over all nodes at a certain level with a min point inside a [`TreeBounds`]
-struct NodesWithin<const DIM: usize> {
+#[derive(Debug)]
+struct CellsWithin<const DIM: usize> {
     range: TreeBounds<DIM>,
     cursor: [u64; DIM],
     level: u32,
 }
 
-impl<const DIM: usize> Iterator for NodesWithin<DIM> {
+impl<const DIM: usize> CellsWithin<DIM> {
+    fn new(range: TreeBounds<DIM>, level: u32) -> Self {
+        Self {
+            range,
+            cursor: range.min,
+            level,
+        }
+    }
+}
+
+impl<const DIM: usize> Iterator for CellsWithin<DIM> {
     type Item = CellCoords<DIM>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -489,7 +515,7 @@ impl<const DIM: usize> Iterator for NodesWithin<DIM> {
     }
 }
 
-impl<const DIM: usize> Default for NodesWithin<DIM> {
+impl<const DIM: usize> Default for CellsWithin<DIM> {
     /// Construct the empty iterator
     fn default() -> Self {
         Self {
@@ -514,6 +540,17 @@ fn child_index_at_level<const DIM: usize>(point: [u64; DIM], level: u32) -> usiz
     let extent = cell_extent(level);
     let local_coords = point.map(|x| (x / extent) % SUBDIV as u64);
     index_from_local_coords(&local_coords, SUBDIV.into())
+}
+
+/// Index of the cell containing `point` in the grid of a node at `level`
+fn grid_index_at_level<const DIM: usize>(point: [u64; DIM], level: u32) -> usize {
+    let extent = cell_extent(level - GRID_OFFSET);
+    let local_coords = point.map(|x| (x / extent) % GRID_SIZE as u64);
+    local_coords
+        .into_iter()
+        .enumerate()
+        .map(|(i, x)| x as usize * GRID_SIZE.pow(i as u32))
+        .sum()
 }
 
 /// Compute the lowest level a value with maximum bounding box edge length `extent` may occupy
@@ -554,7 +591,7 @@ impl<const DIM: usize> TreeBounds<DIM> {
         array::from_fn(|i| self.max[i] - self.min[i] + 1)
     }
 
-    /// Find the smallest node that a value with these bounds could be stored in, i.e. the largest
+    /// Find the smallest node cell a value with these bounds could be stored in, i.e. the largest
     /// level with cells smaller than this `Bounds`'s extents on any dimension
     fn location(&self) -> CellCoords<DIM> {
         let Some(extent) = self.extents().into_iter().max() else {
@@ -570,17 +607,19 @@ impl<const DIM: usize> TreeBounds<DIM> {
     }
 
     /// Compute the index of the node at `level` containing this rect in its parent's child array,
-    /// or `None` if the value must be stored at a higher level
+    /// and the index in the selected node's grid, or `None` if the value must be stored at a higher
+    /// level
     fn index_in(&self, level: u32) -> Option<usize> {
         let Some(max_extent) = self.extents().into_iter().max() else {
             // 0-dimensional case
             return Some(0);
         };
-        let level_extent = cell_extent(level);
-        if max_extent > level_extent * u64::from(SUBDIV) {
+        let extent = cell_extent(level - GRID_OFFSET);
+        let node_extent = extent * SUBDIV.pow(GRID_OFFSET) as u64;
+        if max_extent > extent * u64::from(SUBDIV) {
             return None;
         }
-        let local_coords = self.min.map(|x| (x / level_extent) % SUBDIV as u64);
+        let local_coords = self.min.map(|x| (x / node_extent) % SUBDIV as u64);
         Some(index_from_local_coords(&local_coords, SUBDIV.into()))
     }
 
@@ -599,6 +638,23 @@ impl<const DIM: usize> TreeBounds<DIM> {
             max: array::from_fn(|i| self.max[i].min(other.max[i])),
         }
     }
+
+    #[cfg(test)]
+    fn contains(&self, point: &[u64; DIM]) -> bool {
+        self.min
+            .iter()
+            .zip(&self.max)
+            .zip(point)
+            .all(|((min, max), x)| min <= x && x <= max)
+    }
+
+    /// Shift the minimum value towards the origin by `range`
+    fn relax(&self, range: u64) -> Self {
+        Self {
+            min: self.min.map(|x| x.saturating_sub(range)),
+            max: self.max,
+        }
+    }
 }
 
 impl<const DIM: usize> Default for TreeBounds<DIM> {
@@ -607,6 +663,12 @@ impl<const DIM: usize> Default for TreeBounds<DIM> {
             min: [0; DIM],
             max: [0; DIM],
         }
+    }
+}
+
+impl<const DIM: usize> fmt::Display for TreeBounds<DIM> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}-{:?}", self.min, self.max)
     }
 }
 
@@ -662,7 +724,7 @@ where
 
 struct IntersectingChildren<'a, const DIM: usize> {
     children: &'a [Node<DIM>],
-    inner: NodesWithin<DIM>,
+    inner: CellsWithin<DIM>,
 }
 
 impl<'a, const DIM: usize> Iterator for IntersectingChildren<'a, DIM> {
@@ -690,7 +752,9 @@ impl<'a, const DIM: usize> NodeIter<'a, DIM> for IntersectingChildren<'a, DIM> {
 pub struct Intersections<'a, const DIM: usize, T> {
     elements: &'a Slab<Element<T>>,
     traversal: DepthFirstTraversal<IntersectingChildren<'a, DIM>, TreeBounds<DIM>>,
-    next_element: Option<usize>,
+    next_cell: CellsWithin<DIM>,
+    next_element: ElementIter,
+    grid: &'a [Cell],
 }
 
 impl<'a, const DIM: usize, T> Iterator for Intersections<'a, DIM, T> {
@@ -698,35 +762,65 @@ impl<'a, const DIM: usize, T> Iterator for Intersections<'a, DIM, T> {
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            // Traverse the current node's elements
-            if let Some(index) = self.next_element.take() {
+            // Traverse the current cell's elements
+            if let Some(index) = self.next_element.next(self.elements) {
                 let elt = &self.elements[index];
-                self.next_element = elt.next;
                 return Some((index, &elt.value));
             }
-            // If the current node has no elements, find a new node
+            // If the current cell has no elements, find a new cell
+            if let Some(coords) = self.next_cell.next() {
+                self.next_element =
+                    ElementIter::new(self.grid[coords.index_in_grid()].first_element);
+                continue;
+            }
+            // If we're out of cells, get the next node
             let (_, node) = self.traversal.next()?;
-            self.next_element = node.first_element;
+            self.grid = &node.grid;
+        }
+    }
+}
+
+#[derive(Debug)]
+struct Node<const DIM: usize> {
+    // This should become `Box<[Node<DIM>; SUBDIV.pow(DIM)]>` as soon as Rust permits that
+    children: Option<Box<[Node<DIM>]>>,
+    // This should become `[Node<DIM>; SUBDIV.pow(GRID_OFFSET).pow(DIM)]` as soon as Rust permits that
+    grid: Box<[Cell]>,
+}
+
+fn ensure_children<const DIM: usize>(
+    children: &mut Option<Box<[Node<DIM>]>>,
+) -> (bool, &mut [Node<DIM>]) {
+    match children {
+        Some(x) => (false, x),
+        None => (
+            true,
+            children.insert(
+                (0..SUBDIV.pow(DIM as u32) as usize)
+                    .map(|_| Node::default())
+                    .collect(),
+            ),
+        ),
+    }
+}
+
+impl<const DIM: usize> Default for Node<DIM> {
+    fn default() -> Self {
+        Self {
+            children: None,
+            grid: (0..SUBDIV.pow(GRID_OFFSET).pow(DIM as u32))
+                .map(|_| Cell::default())
+                .collect(),
         }
     }
 }
 
 #[derive(Debug, Default)]
-struct Node<const DIM: usize> {
-    // This should become `Box<[Node; SUBDIV.pow(DIM)]>` as soon as Rust permits that
-    children: Option<Box<[Node<DIM>]>>,
-    /// Length of elements associated directly with this node
+struct Cell {
+    /// Number of elements associated directly with this cell
     // TODO: Count only unsieved elements
     elements: usize,
     first_element: Option<usize>,
-}
-
-fn ensure_children<const DIM: usize>(children: &mut Option<Box<[Node<DIM>]>>) -> &mut [Node<DIM>] {
-    children.get_or_insert_with(|| {
-        (0..SUBDIV.pow(DIM as u32) as usize)
-            .map(|_| Node::default())
-            .collect()
-    })
 }
 
 #[derive(Debug)]
@@ -744,12 +838,42 @@ fn index_from_local_coords<const DIM: usize>(local_coords: &[u64; DIM], grid_siz
         .sum()
 }
 
+fn grid_coords_in<const DIM: usize>(point: &[u64; DIM], level: u32) -> [u64; DIM] {
+    let cell_extent = cell_extent(level);
+    array::from_fn(|i| (point[i] / cell_extent) % GRID_SIZE as u64)
+}
+
 /// A tree of branching factor 2 covering the entire range of u64 can be at most this deep before
 /// nodes can no longer be subdivided.
 const MAX_DEPTH: usize = u64::MAX.ilog(2) as usize;
 
-/// Each level subdivides space into this many parts along each dimension
+/// Each level subdivides space into this many parts along each dimension. Each node has
+/// `SUBDIV.pow(DIM)` children.
 const SUBDIV: u32 = 2;
+
+/// Number of subdivision levels between a node and its grid
+///
+/// A node owns a grid of `SUBDIV.pow(GRID_OFFSET).pow(DIM)` cells. Larger values make the tree less
+/// sparse, which accelerates random access in exchange for increased memory use.
+const GRID_OFFSET: u32 = 2;
+const GRID_SIZE: usize = SUBDIV.pow(GRID_OFFSET) as usize;
+
+#[derive(Default)]
+struct ElementIter {
+    next: Option<usize>,
+}
+
+impl ElementIter {
+    fn new(next: Option<usize>) -> Self {
+        Self { next }
+    }
+
+    fn next<T>(&mut self, elements: &Slab<Element<T>>) -> Option<usize> {
+        let i = self.next?;
+        self.next = elements[i].next;
+        Some(i)
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -805,19 +929,21 @@ mod tests {
             for x in -5..5 {
                 let b = Bounds::point([x as f64, y as f64]);
                 t.insert(b, b);
+                validate::<2, Bounds<2>>(&t);
             }
         }
         t.balance(1, |&x| x);
-        let mut nonempty_nodes = 0;
+        validate::<2, Bounds<2>>(&t);
+        let mut nonempty_cells = 0;
         for (coords, node) in nodes(&t) {
-            assert!(node.elements <= 1, "too many elements at {}", coords);
-            if node.elements == 1 {
-                assert!(node.children.is_none());
-                nonempty_nodes += 1;
+            for cell in &*node.grid {
+                assert!(cell.elements <= 1, "too many elements at {}", coords);
+                if cell.elements == 1 {
+                    nonempty_cells += 1;
+                }
             }
         }
-        assert_eq!(nonempty_nodes, 100);
-        assert!(nodes(&t).count() > 100);
+        assert_eq!(nonempty_cells, 100);
     }
 
     #[test]
@@ -868,6 +994,100 @@ mod tests {
                 stack.extend(children.iter().map(|node| (level - 1, node)));
             }
             Some((level, node))
+        })
+    }
+
+    /// Assert that each element is the right cell
+    #[track_caller]
+    fn validate<const DIM: usize, T>(tree: &SieveTree<DIM, Bounds<DIM>>) {
+        let mut stack = alloc::vec::Vec::new();
+        if let Some(root) = &tree.root {
+            stack.push((root.coords, &root.node));
+        }
+        let mut total_elements = 0;
+        while let Some((coords, node)) = stack.pop() {
+            if let Some(ref children) = node.children {
+                let child_extent = cell_extent(coords.level - 1);
+                for (local, child) in grid::<DIM>(SUBDIV as u64).zip(children.as_ref()) {
+                    let child_coords = CellCoords {
+                        min: array::from_fn(|i| coords.min[i] + local[i] * child_extent),
+                        level: coords.level - 1,
+                    };
+                    stack.push((child_coords, child));
+                }
+            }
+
+            for (local, cell) in grid::<DIM>(GRID_SIZE as u64).zip(node.grid.as_ref()) {
+                let extent = cell_extent(coords.level - GRID_OFFSET);
+                let parent_extent = extent * SUBDIV as u64;
+                let cell_coords = CellCoords::<DIM> {
+                    min: array::from_fn(|i| coords.min[i] + local[i] * extent),
+                    level: coords.level - GRID_OFFSET,
+                };
+                let cell_bounds = cell_coords.bounds();
+                let mut iter = ElementIter::new(cell.first_element);
+                while let Some(elt) = iter.next(&tree.elements) {
+                    total_elements += 1;
+                    let elt_bounds = tree
+                        .root
+                        .as_ref()
+                        .unwrap()
+                        .embedding
+                        .bounds_from_world(tree.scale, &tree.elements[elt].value);
+                    assert!(
+                        cell_bounds.contains(&elt_bounds.min),
+                        "element {} origin {:?} outside of cell {} with bounds {}",
+                        elt,
+                        elt_bounds.min,
+                        cell_coords,
+                        cell_bounds
+                    );
+                    let max_extent = elt_bounds.extents().into_iter().max().unwrap_or(0);
+                    assert!(
+                        max_extent < parent_extent,
+                        "element {} extent {} too large for cell extent {}",
+                        elt,
+                        max_extent,
+                        extent
+                    );
+                    if node.children.is_some() {
+                        assert!(
+                            max_extent >= extent,
+                            "element {} extent {} too small for non-leaf node {} with cell extent {}",
+                            elt,
+                            max_extent,
+                            coords,
+                            extent
+                        );
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            total_elements,
+            tree.elements.len(),
+            "{} elements leaked",
+            tree.elements.len() - total_elements
+        );
+    }
+
+    /// Iterator over all relative coordinates within a cuboid grid
+    fn grid<const DIM: usize>(size: u64) -> impl Iterator<Item = [u64; DIM]> {
+        let mut cursor = [0u64; DIM];
+        core::iter::from_fn(move || {
+            if *cursor.last()? == size {
+                return None;
+            }
+            let result = cursor;
+            cursor[0] += 1;
+            for d in 1..DIM {
+                if cursor[d - 1] < size {
+                    break;
+                }
+                cursor[d - 1] = 0;
+                cursor[d] += 1;
+            }
+            Some(result)
         })
     }
 }
