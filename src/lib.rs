@@ -8,16 +8,16 @@ use core::{array, fmt, mem};
 use arrayvec::ArrayVec;
 use slab::Slab;
 
-/// A `DIM`-dimensional spatial search tree with a branching factor of `BRANCH.pow(DIM)`
+/// A `DIM`-dimensional spatial search tree
 #[derive(Debug)]
-pub struct SieveTree<const DIM: usize, const BRANCH: u32, T> {
+pub struct SieveTree<const DIM: usize, T> {
     /// Length of a level 0 node edge in world space
     scale: f64,
-    root: Option<Root<DIM, BRANCH>>,
+    root: Option<Root<DIM>>,
     elements: Slab<Element<T>>,
 }
 
-impl<const DIM: usize, const BRANCH: u32, T> SieveTree<DIM, BRANCH, T> {
+impl<const DIM: usize, T> SieveTree<DIM, T> {
     /// Create an empty tree
     pub fn new() -> Self {
         Self::default()
@@ -56,7 +56,7 @@ impl<const DIM: usize, const BRANCH: u32, T> SieveTree<DIM, BRANCH, T> {
                     .max();
                 let coords = NodeCoords {
                     min: [0; DIM],
-                    level: extent.map_or(0, level_for_extent::<BRANCH>),
+                    level: extent.map_or(0, level_for_extent),
                 };
                 &mut self
                     .root
@@ -74,7 +74,7 @@ impl<const DIM: usize, const BRANCH: u32, T> SieveTree<DIM, BRANCH, T> {
                     // by a multiple of the root node size to encompass it, and shift the root node
                     // in the opposite direction so we don't have to reindex.
 
-                    let root_extent = node_extent::<BRANCH>(root.coords.level);
+                    let root_extent = node_extent(root.coords.level);
                     let world_root_extent = self.scale * root_extent as f64;
                     let offset: [u64; DIM] = array::from_fn(|i| {
                         let min = current.min[i].min(bounds.min[i]);
@@ -102,7 +102,7 @@ impl<const DIM: usize, const BRANCH: u32, T> SieveTree<DIM, BRANCH, T> {
                     .embedding
                     .bounds_from_world(self.scale, &bounds)
                     .location();
-                find_smallest_parent::<DIM, BRANCH>(root, target)
+                find_smallest_parent::<DIM>(root, target)
             }
         };
         link(&mut self.elements, node, id);
@@ -118,7 +118,7 @@ impl<const DIM: usize, const BRANCH: u32, T> SieveTree<DIM, BRANCH, T> {
         elements_per_node: usize,
         mut get_bounds: impl FnMut(&T) -> Bounds<DIM>,
     ) {
-        fn split<const DIM: usize, const BRANCH: u32, T>(
+        fn split<const DIM: usize, T>(
             scale: f64,
             embedding: &Embedding<DIM>,
             elements: &mut Slab<Element<T>>,
@@ -129,14 +129,14 @@ impl<const DIM: usize, const BRANCH: u32, T> SieveTree<DIM, BRANCH, T> {
             if level == 0 {
                 return;
             }
-            let children = ensure_children::<DIM, BRANCH>(&mut node.children);
+            let children = ensure_children::<DIM>(&mut node.children);
             let mut next_elt = node.first_element;
             let mut prev_elt = None;
             while let Some(element) = next_elt {
                 next_elt = elements[element].next;
                 let bounds =
                     embedding.bounds_from_world(scale, &get_bounds(&elements[element].value));
-                let Some(index) = bounds.index_in::<BRANCH>(level - 1) else {
+                let Some(index) = bounds.index_in(level - 1) else {
                     // Too large to move into children
                     prev_elt = Some(element);
                     continue;
@@ -157,7 +157,7 @@ impl<const DIM: usize, const BRANCH: u32, T> SieveTree<DIM, BRANCH, T> {
             // See comment on `DepthFirstTraversal::queue`
             let mut stack = ArrayVec::<(u32, &mut [Node]), MAX_DEPTH>::new();
             if root.node.elements > elements_per_node {
-                split::<DIM, BRANCH, T>(
+                split::<DIM, T>(
                     self.scale,
                     &root.embedding,
                     &mut self.elements,
@@ -174,7 +174,7 @@ impl<const DIM: usize, const BRANCH: u32, T> SieveTree<DIM, BRANCH, T> {
                 for child in children.iter_mut() {
                     // Balance elements in `child`
                     if child.elements > elements_per_node {
-                        split::<DIM, BRANCH, T>(
+                        split::<DIM, T>(
                             self.scale,
                             &root.embedding,
                             &mut self.elements,
@@ -200,11 +200,11 @@ impl<const DIM: usize, const BRANCH: u32, T> SieveTree<DIM, BRANCH, T> {
         let target = root
             .embedding
             .bounds_from_world(self.scale, &bounds)
-            .location::<BRANCH>();
+            .location();
         // A value is guaranteed to be stored in the smallest existing node permitted for it, because:
         // - `insert` only introduces nodes that are siblings of or larger than the root
         // - `balance` always moves all possible elements into newly created child nodes
-        let node = find_smallest_existing_parent::<DIM, BRANCH>(root, target);
+        let node = find_smallest_existing_parent::<DIM>(root, target);
         unlink(&mut self.elements, node, id);
         elt.value
     }
@@ -224,7 +224,7 @@ impl<const DIM: usize, const BRANCH: u32, T> SieveTree<DIM, BRANCH, T> {
     }
 
     /// Traverse all elements that might intersect with `bounds`
-    pub fn intersections(&self, bounds: Bounds<DIM>) -> Intersections<'_, DIM, BRANCH, T> {
+    pub fn intersections(&self, bounds: Bounds<DIM>) -> Intersections<'_, DIM, T> {
         let mut out = Intersections {
             elements: &self.elements,
             traversal: DepthFirstTraversal::default(),
@@ -248,7 +248,7 @@ impl<const DIM: usize, const BRANCH: u32, T> SieveTree<DIM, BRANCH, T> {
     }
 }
 
-impl<const DIM: usize, const BRANCH: u32, T> Default for SieveTree<DIM, BRANCH, T> {
+impl<const DIM: usize, T> Default for SieveTree<DIM, T> {
     fn default() -> Self {
         Self {
             // 1cm if world space is in meters. Big enough for the solar system.
@@ -260,13 +260,13 @@ impl<const DIM: usize, const BRANCH: u32, T> Default for SieveTree<DIM, BRANCH, 
 }
 
 #[derive(Debug)]
-struct Root<const DIM: usize, const BRANCH: u32> {
+struct Root<const DIM: usize> {
     embedding: Embedding<DIM>,
-    coords: NodeCoords<DIM, BRANCH>,
+    coords: NodeCoords<DIM>,
     node: Node,
 }
 
-impl<const DIM: usize, const BRANCH: u32> Root<DIM, BRANCH> {
+impl<const DIM: usize> Root<DIM> {
     fn world_bounds(&self, scale: f64) -> Bounds<DIM> {
         self.embedding
             .world_bounds_from_tree(scale, &self.coords.bounds())
@@ -274,9 +274,9 @@ impl<const DIM: usize, const BRANCH: u32> Root<DIM, BRANCH> {
 }
 
 /// Look up the smallest existing parent of `target`, uprooting the tree if necessary
-fn find_smallest_parent<const DIM: usize, const BRANCH: u32>(
-    root: &mut Root<DIM, BRANCH>,
-    target: NodeCoords<DIM, BRANCH>,
+fn find_smallest_parent<const DIM: usize>(
+    root: &mut Root<DIM>,
+    target: NodeCoords<DIM>,
 ) -> &mut Node {
     let ancestor = root.coords.smallest_common_ancestor(&target);
     if ancestor == root.coords {
@@ -290,16 +290,16 @@ fn find_smallest_parent<const DIM: usize, const BRANCH: u32>(
     let mut current = &mut root.node;
     let mut current_level = root.coords.level;
     while current_level > old_root_coords.level {
-        let children = ensure_children::<DIM, BRANCH>(&mut current.children);
+        let children = ensure_children::<DIM>(&mut current.children);
         current_level -= 1;
-        let index = child_index_at_level::<DIM, BRANCH>(old_root_coords.min, current_level);
+        let index = child_index_at_level::<DIM>(old_root_coords.min, current_level);
         current = &mut children[index];
     }
     *current = old_root;
 
     if target.level < ancestor.level {
         // Return the child of the new root that encloses `target`
-        let index = child_index_at_level::<DIM, BRANCH>(target.min, root.coords.level - 1);
+        let index = child_index_at_level::<DIM>(target.min, root.coords.level - 1);
         &mut root.node.children.as_mut().unwrap()[index]
     } else {
         // Ancestor is target
@@ -307,9 +307,9 @@ fn find_smallest_parent<const DIM: usize, const BRANCH: u32>(
     }
 }
 
-fn find_smallest_existing_parent<'a, const DIM: usize, const BRANCH: u32>(
-    root: &'a mut Root<DIM, BRANCH>,
-    target: NodeCoords<DIM, BRANCH>,
+fn find_smallest_existing_parent<'a, const DIM: usize>(
+    root: &'a mut Root<DIM>,
+    target: NodeCoords<DIM>,
 ) -> &'a mut Node {
     let mut current = &mut root.node;
     let mut current_level = root.coords.level;
@@ -319,7 +319,7 @@ fn find_smallest_existing_parent<'a, const DIM: usize, const BRANCH: u32>(
                 break;
             }
             current_level -= 1;
-            let index = child_index_at_level::<DIM, BRANCH>(target.min, current_level);
+            let index = child_index_at_level::<DIM>(target.min, current_level);
             // Hack around borrowck limitation
             unsafe {
                 current = mem::transmute::<&mut Node, &'a mut Node>(&mut children[index]);
@@ -387,16 +387,16 @@ impl<const DIM: usize> Embedding<DIM> {
 
 /// Identifies a tree node
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
-struct NodeCoords<const DIM: usize, const BRANCH: u32> {
+struct NodeCoords<const DIM: usize> {
     /// Point in this node with the smallest coordinates on each dimension
     min: [u64; DIM],
-    /// Exponent of `BRANCH` which is the node's extent in each dimension
+    /// Exponent of `SUBDIV` which is the node's extent in each dimension
     level: u32,
 }
 
-impl<const DIM: usize, const BRANCH: u32> NodeCoords<DIM, BRANCH> {
+impl<const DIM: usize> NodeCoords<DIM> {
     fn from_point(point: [u64; DIM], level: u32) -> Self {
-        let extent = node_extent::<BRANCH>(level);
+        let extent = node_extent(level);
         Self {
             min: point.map(|x| (x / extent) * extent),
             level,
@@ -404,7 +404,7 @@ impl<const DIM: usize, const BRANCH: u32> NodeCoords<DIM, BRANCH> {
     }
 
     fn bounds(&self) -> TreeBounds<DIM> {
-        let extent = node_extent::<BRANCH>(self.level);
+        let extent = node_extent(self.level);
         TreeBounds {
             min: self.min,
             max: self.min.map(|x| x + extent - 1),
@@ -416,22 +416,21 @@ impl<const DIM: usize, const BRANCH: u32> NodeCoords<DIM, BRANCH> {
     }
 
     fn index_in_parent(&self) -> usize {
-        let extent = node_extent::<BRANCH>(self.level);
-        let local_coords = self.min.map(|x| (x / extent) % BRANCH as u64);
+        let extent = node_extent(self.level);
+        let local_coords = self.min.map(|x| (x / extent) % SUBDIV as u64);
         local_coords
             .into_iter()
             .enumerate()
-            .map(|(i, x)| x as usize * (BRANCH as usize).pow(i as u32))
+            .map(|(i, x)| x as usize * (SUBDIV as usize).pow(i as u32))
             .sum()
     }
 
-    fn children_overlapping(&self, bounds: &TreeBounds<DIM>) -> Option<NodesWithin<DIM, BRANCH>> {
+    fn children_overlapping(&self, bounds: &TreeBounds<DIM>) -> Option<NodesWithin<DIM>> {
         let mut range = self.bounds().intersection(bounds);
         let level = self.level.checked_sub(1)?;
-        let extent = node_extent::<BRANCH>(level);
+        let extent = node_extent(level);
         // Clamp lower bound to `level` grid, then subtract one step in each dimension to allow for
         // edge-crossing
-        // FIXME: need to subtract one *parent* extent! Bad design.
         range.min = range.min.map(|x| (x - x % extent).saturating_sub(extent));
         Some(NodesWithin {
             range,
@@ -460,9 +459,9 @@ impl<const DIM: usize, const BRANCH: u32> NodeCoords<DIM, BRANCH> {
     }
 }
 
-impl<const DIM: usize, const BRANCH: u32> fmt::Display for NodeCoords<DIM, BRANCH> {
+impl<const DIM: usize> fmt::Display for NodeCoords<DIM> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let extent = node_extent::<BRANCH>(self.level);
+        let extent = node_extent(self.level);
         write!(f, "{}:[", self.level)?;
         for (i, x) in self.min.iter().enumerate() {
             if i > 0 {
@@ -475,14 +474,14 @@ impl<const DIM: usize, const BRANCH: u32> fmt::Display for NodeCoords<DIM, BRANC
 }
 
 /// Iterator over all nodes at a certain level with a min point inside a [`TreeBounds`]
-struct NodesWithin<const DIM: usize, const BRANCH: u32> {
+struct NodesWithin<const DIM: usize> {
     range: TreeBounds<DIM>,
     cursor: [u64; DIM],
     level: u32,
 }
 
-impl<const DIM: usize, const BRANCH: u32> Iterator for NodesWithin<DIM, BRANCH> {
-    type Item = NodeCoords<DIM, BRANCH>;
+impl<const DIM: usize> Iterator for NodesWithin<DIM> {
+    type Item = NodeCoords<DIM>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.cursor.last().unwrap() > self.range.max.last().unwrap() {
@@ -492,7 +491,7 @@ impl<const DIM: usize, const BRANCH: u32> Iterator for NodesWithin<DIM, BRANCH> 
             level: self.level,
             min: self.cursor,
         };
-        let extent = node_extent::<BRANCH>(self.level);
+        let extent = node_extent(self.level);
         self.cursor[0] += extent;
         for i in 1..DIM {
             if self.cursor[i - 1] <= self.range.max[i - 1] {
@@ -505,7 +504,7 @@ impl<const DIM: usize, const BRANCH: u32> Iterator for NodesWithin<DIM, BRANCH> 
     }
 }
 
-impl<const DIM: usize, const BRANCH: u32> Default for NodesWithin<DIM, BRANCH> {
+impl<const DIM: usize> Default for NodesWithin<DIM> {
     /// Construct the empty iterator
     fn default() -> Self {
         Self {
@@ -519,29 +518,27 @@ impl<const DIM: usize, const BRANCH: u32> Default for NodesWithin<DIM, BRANCH> {
     }
 }
 
-const fn node_extent<const BRANCH: u32>(level: u32) -> u64 {
-    (BRANCH as u64).saturating_pow(level)
+const fn node_extent(level: u32) -> u64 {
+    (SUBDIV as u64).saturating_pow(level)
 }
 
 /// Compute the index of the node at `level` containing `point` in its parent's child array
 ///
 /// Equivalent to `NodeCoords::from_point(point, level).index_in_parent()`
-fn child_index_at_level<const DIM: usize, const BRANCH: u32>(
-    point: [u64; DIM],
-    level: u32,
-) -> usize {
-    let extent = node_extent::<BRANCH>(level);
-    let local_coords = point.map(|x| (x / extent) % BRANCH as u64);
+fn child_index_at_level<const DIM: usize>(point: [u64; DIM], level: u32) -> usize {
+    let extent = node_extent(level);
+    let local_coords = point.map(|x| (x / extent) % SUBDIV as u64);
     local_coords
         .into_iter()
         .enumerate()
-        .map(|(i, x)| x as usize * (BRANCH as usize).pow(i as u32))
+        .map(|(i, x)| x as usize * (SUBDIV as usize).pow(i as u32))
         .sum()
 }
 
 /// Compute the lowest level a value with maximum bounding box edge length `extent` may occupy
-fn level_for_extent<const BRANCH: u32>(extent: u64) -> u32 {
-    extent.ilog(BRANCH as u64)
+fn level_for_extent(extent: u64) -> u32 {
+    assert_eq!(SUBDIV, 2);
+    extent.ilog2()
 }
 
 /// An axis-aligned bounding box in world space
@@ -578,7 +575,7 @@ impl<const DIM: usize> TreeBounds<DIM> {
 
     /// Find the smallest node that a value with these bounds could be stored in, i.e. the largest
     /// level with cells smaller than this `Bounds`'s extents on any dimension
-    fn location<const BRANCH: u32>(&self) -> NodeCoords<DIM, BRANCH> {
+    fn location(&self) -> NodeCoords<DIM> {
         let Some(extent) = self.extents().into_iter().max() else {
             // 0-dimensional case
             return NodeCoords {
@@ -587,27 +584,27 @@ impl<const DIM: usize> TreeBounds<DIM> {
             };
         };
 
-        let level = level_for_extent::<BRANCH>(extent);
+        let level = level_for_extent(extent);
         NodeCoords::from_point(self.min, level)
     }
 
     /// Compute the index of the node at `level` containing this rect in its parent's child array,
     /// or `None` if the value must be stored at a higher level
-    fn index_in<const BRANCH: u32>(&self, level: u32) -> Option<usize> {
+    fn index_in(&self, level: u32) -> Option<usize> {
         let Some(max_extent) = self.extents().into_iter().max() else {
             // 0-dimensional case
             return Some(0);
         };
-        let level_extent = node_extent::<BRANCH>(level);
-        if max_extent > level_extent * u64::from(BRANCH) {
+        let level_extent = node_extent(level);
+        if max_extent > level_extent * u64::from(SUBDIV) {
             return None;
         }
-        let local_coords = self.min.map(|x| (x / level_extent) % BRANCH as u64);
+        let local_coords = self.min.map(|x| (x / level_extent) % SUBDIV as u64);
         Some(
             local_coords
                 .into_iter()
                 .enumerate()
-                .map(|(i, x)| x as usize * (BRANCH as usize).pow(i as u32))
+                .map(|(i, x)| x as usize * (SUBDIV as usize).pow(i as u32))
                 .sum(),
         )
     }
@@ -641,18 +638,16 @@ impl<const DIM: usize> Default for TreeBounds<DIM> {
 struct DepthFirstTraversal<ChildIter, Context> {
     // By tracking groups of children, rather than individual nodes, we can keep the stack size
     // to O(depth), whereas a naive depth-first traversal would require O(depth * branch^dim).
-    //
-    // `MAX_DEPTH` should be computed from `BRANCH` once Rust permits that
     queue: ArrayVec<ChildIter, MAX_DEPTH>,
     context: Context,
 }
 
-impl<'a, const DIM: usize, const BRANCH: u32, I> Iterator for DepthFirstTraversal<I, I::Context>
+impl<'a, const DIM: usize, I> Iterator for DepthFirstTraversal<I, I::Context>
 where
     // `+ Iterator<...>` is redundant here, but rustc insists...
-    I: NodeIter<'a, DIM, BRANCH> + Iterator<Item = (NodeCoords<DIM, BRANCH>, &'a Node)>,
+    I: NodeIter<'a, DIM> + Iterator<Item = (NodeCoords<DIM>, &'a Node)>,
 {
-    type Item = (NodeCoords<DIM, BRANCH>, &'a Node);
+    type Item = (NodeCoords<DIM>, &'a Node);
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -682,21 +677,21 @@ where
     }
 }
 
-trait NodeIter<'a, const DIM: usize, const BRANCH: u32>
+trait NodeIter<'a, const DIM: usize>
 where
-    Self: Iterator<Item = (NodeCoords<DIM, BRANCH>, &'a Node)>,
+    Self: Iterator<Item = (NodeCoords<DIM>, &'a Node)>,
 {
     type Context;
-    fn new(context: &Self::Context, coords: NodeCoords<DIM, BRANCH>, children: &'a [Node]) -> Self;
+    fn new(context: &Self::Context, coords: NodeCoords<DIM>, children: &'a [Node]) -> Self;
 }
 
-struct IntersectingChildren<'a, const DIM: usize, const BRANCH: u32> {
+struct IntersectingChildren<'a, const DIM: usize> {
     children: &'a [Node],
-    inner: NodesWithin<DIM, BRANCH>,
+    inner: NodesWithin<DIM>,
 }
 
-impl<'a, const DIM: usize, const BRANCH: u32> Iterator for IntersectingChildren<'a, DIM, BRANCH> {
-    type Item = (NodeCoords<DIM, BRANCH>, &'a Node);
+impl<'a, const DIM: usize> Iterator for IntersectingChildren<'a, DIM> {
+    type Item = (NodeCoords<DIM>, &'a Node);
 
     fn next(&mut self) -> Option<Self::Item> {
         let child_coords = self.inner.next()?;
@@ -705,16 +700,10 @@ impl<'a, const DIM: usize, const BRANCH: u32> Iterator for IntersectingChildren<
     }
 }
 
-impl<'a, const DIM: usize, const BRANCH: u32> NodeIter<'a, DIM, BRANCH>
-    for IntersectingChildren<'a, DIM, BRANCH>
-{
+impl<'a, const DIM: usize> NodeIter<'a, DIM> for IntersectingChildren<'a, DIM> {
     type Context = TreeBounds<DIM>;
 
-    fn new(
-        bounds: &TreeBounds<DIM>,
-        coords: NodeCoords<DIM, BRANCH>,
-        children: &'a [Node],
-    ) -> Self {
+    fn new(bounds: &TreeBounds<DIM>, coords: NodeCoords<DIM>, children: &'a [Node]) -> Self {
         Self {
             children,
             inner: coords.children_overlapping(bounds).unwrap(),
@@ -723,13 +712,13 @@ impl<'a, const DIM: usize, const BRANCH: u32> NodeIter<'a, DIM, BRANCH>
 }
 
 /// Iterator over nodes that might intersect with a [`Bounds`]
-pub struct Intersections<'a, const DIM: usize, const BRANCH: u32, T> {
+pub struct Intersections<'a, const DIM: usize, T> {
     elements: &'a Slab<Element<T>>,
-    traversal: DepthFirstTraversal<IntersectingChildren<'a, DIM, BRANCH>, TreeBounds<DIM>>,
+    traversal: DepthFirstTraversal<IntersectingChildren<'a, DIM>, TreeBounds<DIM>>,
     next_element: Option<usize>,
 }
 
-impl<'a, const DIM: usize, const BRANCH: u32, T> Iterator for Intersections<'a, DIM, BRANCH, T> {
+impl<'a, const DIM: usize, T> Iterator for Intersections<'a, DIM, T> {
     type Item = (usize, &'a T);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -749,7 +738,7 @@ impl<'a, const DIM: usize, const BRANCH: u32, T> Iterator for Intersections<'a, 
 
 #[derive(Debug, Default)]
 struct Node {
-    // This should become `Box<[Node; BRANCH.pow(DIM)]>` as soon as Rust permits that
+    // This should become `Box<[Node; SUBDIV.pow(DIM)]>` as soon as Rust permits that
     children: Option<Box<[Node]>>,
     /// Length of elements associated directly with this node
     // TODO: Count only unsieved elements
@@ -757,11 +746,9 @@ struct Node {
     first_element: Option<usize>,
 }
 
-fn ensure_children<const DIM: usize, const BRANCH: u32>(
-    children: &mut Option<Box<[Node]>>,
-) -> &mut [Node] {
+fn ensure_children<const DIM: usize>(children: &mut Option<Box<[Node]>>) -> &mut [Node] {
     children.get_or_insert_with(|| {
-        (0..BRANCH.pow(DIM as u32) as usize)
+        (0..SUBDIV.pow(DIM as u32) as usize)
             .map(|_| Node::default())
             .collect()
     })
@@ -777,47 +764,46 @@ struct Element<T> {
 /// nodes can no longer be subdivided.
 const MAX_DEPTH: usize = u64::MAX.ilog(2) as usize;
 
+/// Each level subdivides space into this many parts along each dimension
+const SUBDIV: u32 = 2;
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn common_ancestors() {
-        type Node1D2 = NodeCoords<1, 2>;
+        type Node1D = NodeCoords<1>;
 
-        let min = Node1D2::from_point([0], 0);
+        let min = Node1D::from_point([0], 0);
         assert_eq!(min.smallest_common_ancestor(&min), min);
         assert_eq!(
-            Node1D2::from_point([1], 0).smallest_common_ancestor(&min),
-            Node1D2::from_point([0], 1)
+            Node1D::from_point([1], 0).smallest_common_ancestor(&min),
+            Node1D::from_point([0], 1)
         );
         assert_eq!(
-            Node1D2::from_point([1], 0).smallest_common_ancestor(&min),
-            Node1D2::from_point([0], 1)
+            Node1D::from_point([1], 0).smallest_common_ancestor(&min),
+            Node1D::from_point([0], 1)
         );
         assert_eq!(
-            Node1D2::from_point([2], 0).smallest_common_ancestor(&min),
-            Node1D2::from_point([0], 2)
+            Node1D::from_point([2], 0).smallest_common_ancestor(&min),
+            Node1D::from_point([0], 2)
         );
         assert_eq!(
-            Node1D2::from_point([3], 0).smallest_common_ancestor(&min),
-            Node1D2::from_point([0], 2)
+            Node1D::from_point([3], 0).smallest_common_ancestor(&min),
+            Node1D::from_point([0], 2)
         );
     }
 
     #[test]
     fn index_in_parent_leaf() {
-        const BRANCH: u32 = 3;
-        let origin = BRANCH * 7;
-        for y in 0..BRANCH {
-            for x in 0..BRANCH {
+        let origin = SUBDIV * 7;
+        for y in 0..SUBDIV {
+            for x in 0..SUBDIV {
                 assert_eq!(
-                    NodeCoords::<2, BRANCH>::from_point(
-                        [(origin + x).into(), (origin + y).into()],
-                        0
-                    )
-                    .index_in_parent(),
-                    (y * BRANCH + x) as usize
+                    NodeCoords::<2>::from_point([(origin + x).into(), (origin + y).into()], 0)
+                        .index_in_parent(),
+                    (y * SUBDIV + x) as usize
                 );
             }
         }
@@ -825,12 +811,12 @@ mod tests {
 
     #[test]
     fn index_in_parent_mid() {
-        assert_eq!(NodeCoords::<1, 2>::from_point([5], 2).index_in_parent(), 1);
+        assert_eq!(NodeCoords::<1>::from_point([5], 2).index_in_parent(), 1);
     }
 
     #[test]
     fn balance() {
-        let mut t = SieveTree::<2, 4, Bounds<2>>::new();
+        let mut t = SieveTree::<2, Bounds<2>>::new();
         for y in -5..5 {
             for x in -5..5 {
                 let b = Bounds::point([x as f64, y as f64]);
@@ -852,7 +838,7 @@ mod tests {
 
     #[test]
     fn smoke() {
-        let mut t = SieveTree::<2, 4, Bounds<2>>::new();
+        let mut t = SieveTree::<2, Bounds<2>>::new();
         let b = Bounds {
             min: [4.0, 4.0],
             max: [107.0, 107.0],
@@ -885,8 +871,8 @@ mod tests {
         );
     }
 
-    fn nodes<const DIM: usize, const BRANCH: u32, T>(
-        tree: &SieveTree<DIM, BRANCH, T>,
+    fn nodes<const DIM: usize, T>(
+        tree: &SieveTree<DIM, T>,
     ) -> impl Iterator<Item = (u32, &'_ Node)> {
         let mut stack = alloc::vec::Vec::new();
         if let Some(root) = &tree.root {
