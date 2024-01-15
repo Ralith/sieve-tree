@@ -74,7 +74,7 @@ impl<const DIM: usize, T> SieveTree<DIM, T> {
                     // by a multiple of the root node size to encompass it, and shift the root node
                     // in the opposite direction so we don't have to reindex.
 
-                    let root_extent = node_extent(root.coords.level);
+                    let root_extent = cell_extent(root.coords.level);
                     let world_root_extent = self.scale * root_extent as f64;
                     let offset: [u64; DIM] = array::from_fn(|i| {
                         let min = current.min[i].min(bounds.min[i]);
@@ -404,7 +404,7 @@ struct CellCoords<const DIM: usize> {
 
 impl<const DIM: usize> CellCoords<DIM> {
     fn from_point(point: [u64; DIM], level: u32) -> Self {
-        let extent = node_extent(level);
+        let extent = cell_extent(level);
         Self {
             min: point.map(|x| (x / extent) * extent),
             level,
@@ -412,7 +412,7 @@ impl<const DIM: usize> CellCoords<DIM> {
     }
 
     fn bounds(&self) -> TreeBounds<DIM> {
-        let extent = node_extent(self.level);
+        let extent = cell_extent(self.level);
         TreeBounds {
             min: self.min,
             max: self.min.map(|x| x + extent - 1),
@@ -424,7 +424,7 @@ impl<const DIM: usize> CellCoords<DIM> {
     }
 
     fn index_in_parent(&self) -> usize {
-        let extent = node_extent(self.level);
+        let extent = cell_extent(self.level);
         let local_coords = self.min.map(|x| (x / extent) % SUBDIV as u64);
         local_coords
             .into_iter()
@@ -436,7 +436,7 @@ impl<const DIM: usize> CellCoords<DIM> {
     fn children_overlapping(&self, bounds: &TreeBounds<DIM>) -> Option<NodesWithin<DIM>> {
         let mut range = self.bounds().intersection(bounds);
         let level = self.level.checked_sub(1)?;
-        let extent = node_extent(level);
+        let extent = cell_extent(level);
         // Clamp lower bound to `level` grid, then subtract one step in each dimension to allow for
         // edge-crossing
         range.min = range.min.map(|x| (x - x % extent).saturating_sub(extent));
@@ -469,7 +469,7 @@ impl<const DIM: usize> CellCoords<DIM> {
 
 impl<const DIM: usize> fmt::Display for CellCoords<DIM> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let extent = node_extent(self.level);
+        let extent = cell_extent(self.level);
         write!(f, "{}:[", self.level)?;
         for (i, x) in self.min.iter().enumerate() {
             if i > 0 {
@@ -499,7 +499,7 @@ impl<const DIM: usize> Iterator for NodesWithin<DIM> {
             level: self.level,
             min: self.cursor,
         };
-        let extent = node_extent(self.level);
+        let extent = cell_extent(self.level);
         self.cursor[0] += extent;
         for i in 1..DIM {
             if self.cursor[i - 1] <= self.range.max[i - 1] {
@@ -526,7 +526,7 @@ impl<const DIM: usize> Default for NodesWithin<DIM> {
     }
 }
 
-const fn node_extent(level: u32) -> u64 {
+const fn cell_extent(level: u32) -> u64 {
     (SUBDIV as u64).saturating_pow(level)
 }
 
@@ -534,7 +534,7 @@ const fn node_extent(level: u32) -> u64 {
 ///
 /// Equivalent to `CellCoords::from_point(point, level).index_in_parent()`
 fn child_index_at_level<const DIM: usize>(point: [u64; DIM], level: u32) -> usize {
-    let extent = node_extent(level);
+    let extent = cell_extent(level);
     let local_coords = point.map(|x| (x / extent) % SUBDIV as u64);
     local_coords
         .into_iter()
@@ -603,7 +603,7 @@ impl<const DIM: usize> TreeBounds<DIM> {
             // 0-dimensional case
             return Some(0);
         };
-        let level_extent = node_extent(level);
+        let level_extent = cell_extent(level);
         if max_extent > level_extent * u64::from(SUBDIV) {
             return None;
         }
