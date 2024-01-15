@@ -11,7 +11,7 @@ use slab::Slab;
 /// A `DIM`-dimensional spatial search tree with a branching factor of `BRANCH.pow(DIM)`
 #[derive(Debug)]
 pub struct SieveTree<const DIM: usize, const BRANCH: u32, T> {
-    root: Option<(NodeCoords<DIM, BRANCH>, Node)>,
+    root: Option<Root<DIM, BRANCH>>,
     elements: Slab<Element<T>>,
 }
 
@@ -32,8 +32,16 @@ impl<const DIM: usize, const BRANCH: u32, T> SieveTree<DIM, BRANCH, T> {
 
         let loc = bounds.location::<BRANCH>();
         let node = match &mut self.root {
-            None => &mut self.root.insert((loc, Node::default())).1,
-            Some((coords, root)) => find_smallest_parent::<DIM, BRANCH>(coords, root, loc),
+            None => {
+                &mut self
+                    .root
+                    .insert(Root {
+                        coords: loc,
+                        node: Node::default(),
+                    })
+                    .node
+            }
+            Some(root) => find_smallest_parent::<DIM, BRANCH>(root, loc),
         };
         link(&mut self.elements, node, id);
 
@@ -77,12 +85,12 @@ impl<const DIM: usize, const BRANCH: u32, T> SieveTree<DIM, BRANCH, T> {
 
         // See comment on `DepthFirstTraversal::queue`
         let mut stack = ArrayVec::<(NodeCoords<DIM, BRANCH>, &mut [Node]), MAX_DEPTH>::new();
-        if let Some((coords, ref mut root)) = self.root {
-            if root.elements > elements_per_node {
-                split(&mut self.elements, coords, root);
+        if let Some(root) = &mut self.root {
+            if root.node.elements > elements_per_node {
+                split(&mut self.elements, root.coords, &mut root.node);
             }
-            if let Some(children) = root.children.as_mut() {
-                stack.push((coords, children));
+            if let Some(children) = root.node.children.as_mut() {
+                stack.push((root.coords, children));
             }
         }
         while let Some((coords, children)) = stack.pop() {
@@ -107,10 +115,8 @@ impl<const DIM: usize, const BRANCH: u32, T> SieveTree<DIM, BRANCH, T> {
         T: Bounded<DIM>,
     {
         let elt = self.elements.remove(id);
-        let (coords, root) = self.root.as_mut().unwrap();
         let node = find_smallest_parent::<DIM, BRANCH>(
-            coords,
-            root,
+            self.root.as_mut().unwrap(),
             elt.value.bounds().location::<BRANCH>(),
         );
         unlink(&mut self.elements, node, id);
@@ -118,7 +124,7 @@ impl<const DIM: usize, const BRANCH: u32, T> SieveTree<DIM, BRANCH, T> {
     }
 
     pub fn bounds(&self) -> Option<Bounds<DIM>> {
-        self.root.as_ref().map(|(coords, _)| coords.bounds())
+        self.root.as_ref().map(|root| root.coords.bounds())
     }
 
     pub fn get(&self, id: usize) -> Option<&T> {
@@ -136,12 +142,12 @@ impl<const DIM: usize, const BRANCH: u32, T> SieveTree<DIM, BRANCH, T> {
             traversal: DepthFirstTraversal::default(),
             next_element: None,
         };
-        if let Some((coords, ref node)) = self.root {
-            if bounds.intersects(&coords.bounds()) {
-                out.next_element = node.first_element;
-                if let Some(children) = node.children.as_ref() {
+        if let Some(ref root) = self.root {
+            if bounds.intersects(&root.coords.bounds()) {
+                out.next_element = root.node.first_element;
+                if let Some(children) = root.node.children.as_ref() {
                     out.traversal = DepthFirstTraversal {
-                        queue: [IntersectingChildren::new(&bounds, coords, children)]
+                        queue: [IntersectingChildren::new(&bounds, root.coords, children)]
                             .into_iter()
                             .collect(),
                         context: bounds,
@@ -162,21 +168,26 @@ impl<const DIM: usize, const BRANCH: u32, T> Default for SieveTree<DIM, BRANCH, 
     }
 }
 
+#[derive(Debug)]
+struct Root<const DIM: usize, const BRANCH: u32> {
+    coords: NodeCoords<DIM, BRANCH>,
+    node: Node,
+}
+
 /// Look up the smallest existing parent of `target`, uprooting the tree if necessary
 fn find_smallest_parent<'a, const DIM: usize, const BRANCH: u32>(
-    root_coords: &mut NodeCoords<DIM, BRANCH>,
-    root: &'a mut Node,
+    root: &'a mut Root<DIM, BRANCH>,
     target: NodeCoords<DIM, BRANCH>,
 ) -> &'a mut Node {
-    let ancestor = root_coords.smallest_common_ancestor(&target);
-    if ancestor != *root_coords {
+    let ancestor = root.coords.smallest_common_ancestor(&target);
+    if ancestor != root.coords {
         // Create new root that encloses both old root and target
-        let old_root = mem::take(root);
-        let old_root_coords = mem::replace(root_coords, ancestor);
+        let old_root = mem::take(&mut root.node);
+        let old_root_coords = mem::replace(&mut root.coords, ancestor);
 
         // Reattach the old root under the new root
-        let mut current = &mut *root;
-        let mut current_level = root_coords.level;
+        let mut current = &mut root.node;
+        let mut current_level = root.coords.level;
         while current_level > old_root_coords.level {
             let children = ensure_children::<DIM, BRANCH>(&mut current.children);
             current_level -= 1;
@@ -187,17 +198,17 @@ fn find_smallest_parent<'a, const DIM: usize, const BRANCH: u32>(
 
         if target.level < ancestor.level {
             // Return the child of the new root that encloses `target`
-            let index = child_index_at_level::<DIM, BRANCH>(target.min, root_coords.level - 1);
-            return &mut root.children.as_mut().unwrap()[index];
+            let index = child_index_at_level::<DIM, BRANCH>(target.min, root.coords.level - 1);
+            return &mut root.node.children.as_mut().unwrap()[index];
         } else {
             // Ancestor is target
-            return root;
+            return &mut root.node;
         }
     }
 
     // Find smallest enclosing node that already exists
-    let mut current = root;
-    let mut current_level = root_coords.level;
+    let mut current = &mut root.node;
+    let mut current_level = root.coords.level;
     {
         while let Some(ref mut children) = current.children {
             if current_level == target.level {
@@ -740,8 +751,8 @@ mod tests {
         tree: &SieveTree<DIM, BRANCH, T>,
     ) -> impl Iterator<Item = (NodeCoords<DIM, BRANCH>, &'_ Node)> {
         let mut stack = alloc::vec::Vec::new();
-        if let Some((coords, ref node)) = tree.root {
-            stack.push((coords, node));
+        if let Some(root) = &tree.root {
+            stack.push((root.coords, &root.node));
         }
         core::iter::from_fn(move || {
             let (coords, node) = stack.pop()?;
