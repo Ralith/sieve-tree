@@ -431,6 +431,7 @@ impl<const DIM: usize, const BRANCH: u32> NodeCoords<DIM, BRANCH> {
         let extent = node_extent::<BRANCH>(level);
         // Clamp lower bound to `level` grid, then subtract one step in each dimension to allow for
         // edge-crossing
+        // FIXME: need to subtract one *parent* extent! Bad design.
         range.min = range.min.map(|x| (x - x % extent).saturating_sub(extent));
         Some(NodesWithin {
             range,
