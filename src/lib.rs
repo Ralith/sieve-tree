@@ -212,12 +212,14 @@ impl<const DIM: usize, const BRANCH: u32, T> SieveTree<DIM, BRANCH, T> {
         self.root.as_ref().map(|root| root.world_bounds(self.scale))
     }
 
-    pub fn get(&self, id: usize) -> Option<&T> {
-        Some(&self.elements.get(id)?.value)
+    /// Borrow the value associated with `id`
+    pub fn get(&self, id: usize) -> &T {
+        &self.elements.get(id).unwrap().value
     }
 
-    pub fn get_mut(&mut self, id: usize) -> Option<&mut T> {
-        Some(&mut self.elements.get_mut(id)?.value)
+    /// Uniquely borrow the value associated with `id`
+    pub fn get_mut(&mut self, id: usize) -> &mut T {
+        &mut self.elements.get_mut(id).unwrap().value
     }
 
     /// Traverse all elements that might intersect with `bounds`
