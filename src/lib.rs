@@ -54,7 +54,7 @@ impl<const DIM: usize, T> SieveTree<DIM, T> {
                     .extents()
                     .into_iter()
                     .max();
-                let coords = NodeCoords {
+                let coords = CellCoords {
                     min: [0; DIM],
                     level: extent.map_or(0, level_for_extent),
                 };
@@ -262,7 +262,7 @@ impl<const DIM: usize, T> Default for SieveTree<DIM, T> {
 #[derive(Debug)]
 struct Root<const DIM: usize> {
     embedding: Embedding<DIM>,
-    coords: NodeCoords<DIM>,
+    coords: CellCoords<DIM>,
     node: Node<DIM>,
 }
 
@@ -276,7 +276,7 @@ impl<const DIM: usize> Root<DIM> {
 /// Look up the smallest existing parent of `target`, uprooting the tree if necessary
 fn find_smallest_parent<const DIM: usize>(
     root: &mut Root<DIM>,
-    target: NodeCoords<DIM>,
+    target: CellCoords<DIM>,
 ) -> &mut Node<DIM> {
     let ancestor = root.coords.smallest_common_ancestor(&target);
     if ancestor == root.coords {
@@ -309,7 +309,7 @@ fn find_smallest_parent<const DIM: usize>(
 
 fn find_smallest_existing_parent<'a, const DIM: usize>(
     root: &'a mut Root<DIM>,
-    target: NodeCoords<DIM>,
+    target: CellCoords<DIM>,
 ) -> &'a mut Node<DIM> {
     let mut current = &mut root.node;
     let mut current_level = root.coords.level;
@@ -393,16 +393,16 @@ impl<const DIM: usize> Embedding<DIM> {
     }
 }
 
-/// Identifies a tree node
+/// Identifies a single cell, anywhere in tree space
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
-struct NodeCoords<const DIM: usize> {
-    /// Point in this node with the smallest coordinates on each dimension
+struct CellCoords<const DIM: usize> {
+    /// Point in this cell with the smallest coordinates on each dimension
     min: [u64; DIM],
-    /// Exponent of `SUBDIV` which is the node's extent in each dimension
+    /// Exponent of `SUBDIV` which is the cell's extent in each dimension
     level: u32,
 }
 
-impl<const DIM: usize> NodeCoords<DIM> {
+impl<const DIM: usize> CellCoords<DIM> {
     fn from_point(point: [u64; DIM], level: u32) -> Self {
         let extent = node_extent(level);
         Self {
@@ -467,7 +467,7 @@ impl<const DIM: usize> NodeCoords<DIM> {
     }
 }
 
-impl<const DIM: usize> fmt::Display for NodeCoords<DIM> {
+impl<const DIM: usize> fmt::Display for CellCoords<DIM> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let extent = node_extent(self.level);
         write!(f, "{}:[", self.level)?;
@@ -489,13 +489,13 @@ struct NodesWithin<const DIM: usize> {
 }
 
 impl<const DIM: usize> Iterator for NodesWithin<DIM> {
-    type Item = NodeCoords<DIM>;
+    type Item = CellCoords<DIM>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.cursor.last().unwrap() > self.range.max.last().unwrap() {
             return None;
         }
-        let result = NodeCoords {
+        let result = CellCoords {
             level: self.level,
             min: self.cursor,
         };
@@ -532,7 +532,7 @@ const fn node_extent(level: u32) -> u64 {
 
 /// Compute the index of the node at `level` containing `point` in its parent's child array
 ///
-/// Equivalent to `NodeCoords::from_point(point, level).index_in_parent()`
+/// Equivalent to `CellCoords::from_point(point, level).index_in_parent()`
 fn child_index_at_level<const DIM: usize>(point: [u64; DIM], level: u32) -> usize {
     let extent = node_extent(level);
     let local_coords = point.map(|x| (x / extent) % SUBDIV as u64);
@@ -583,17 +583,17 @@ impl<const DIM: usize> TreeBounds<DIM> {
 
     /// Find the smallest node that a value with these bounds could be stored in, i.e. the largest
     /// level with cells smaller than this `Bounds`'s extents on any dimension
-    fn location(&self) -> NodeCoords<DIM> {
+    fn location(&self) -> CellCoords<DIM> {
         let Some(extent) = self.extents().into_iter().max() else {
             // 0-dimensional case
-            return NodeCoords {
+            return CellCoords {
                 level: 0,
                 min: [0; DIM],
             };
         };
 
         let level = level_for_extent(extent);
-        NodeCoords::from_point(self.min, level)
+        CellCoords::from_point(self.min, level)
     }
 
     /// Compute the index of the node at `level` containing this rect in its parent's child array,
@@ -653,9 +653,9 @@ struct DepthFirstTraversal<ChildIter, Context> {
 impl<'a, const DIM: usize, I> Iterator for DepthFirstTraversal<I, I::Context>
 where
     // `+ Iterator<...>` is redundant here, but rustc insists...
-    I: NodeIter<'a, DIM> + Iterator<Item = (NodeCoords<DIM>, &'a Node<DIM>)>,
+    I: NodeIter<'a, DIM> + Iterator<Item = (CellCoords<DIM>, &'a Node<DIM>)>,
 {
-    type Item = (NodeCoords<DIM>, &'a Node<DIM>);
+    type Item = (CellCoords<DIM>, &'a Node<DIM>);
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -687,10 +687,10 @@ where
 
 trait NodeIter<'a, const DIM: usize>
 where
-    Self: Iterator<Item = (NodeCoords<DIM>, &'a Node<DIM>)>,
+    Self: Iterator<Item = (CellCoords<DIM>, &'a Node<DIM>)>,
 {
     type Context;
-    fn new(context: &Self::Context, coords: NodeCoords<DIM>, children: &'a [Node<DIM>]) -> Self;
+    fn new(context: &Self::Context, coords: CellCoords<DIM>, children: &'a [Node<DIM>]) -> Self;
 }
 
 struct IntersectingChildren<'a, const DIM: usize> {
@@ -699,7 +699,7 @@ struct IntersectingChildren<'a, const DIM: usize> {
 }
 
 impl<'a, const DIM: usize> Iterator for IntersectingChildren<'a, DIM> {
-    type Item = (NodeCoords<DIM>, &'a Node<DIM>);
+    type Item = (CellCoords<DIM>, &'a Node<DIM>);
 
     fn next(&mut self) -> Option<Self::Item> {
         let child_coords = self.inner.next()?;
@@ -711,7 +711,7 @@ impl<'a, const DIM: usize> Iterator for IntersectingChildren<'a, DIM> {
 impl<'a, const DIM: usize> NodeIter<'a, DIM> for IntersectingChildren<'a, DIM> {
     type Context = TreeBounds<DIM>;
 
-    fn new(bounds: &TreeBounds<DIM>, coords: NodeCoords<DIM>, children: &'a [Node<DIM>]) -> Self {
+    fn new(bounds: &TreeBounds<DIM>, coords: CellCoords<DIM>, children: &'a [Node<DIM>]) -> Self {
         Self {
             children,
             inner: coords.children_overlapping(bounds).unwrap(),
@@ -781,7 +781,7 @@ mod tests {
 
     #[test]
     fn common_ancestors() {
-        type Node1D = NodeCoords<1>;
+        type Node1D = CellCoords<1>;
 
         let min = Node1D::from_point([0], 0);
         assert_eq!(min.smallest_common_ancestor(&min), min);
@@ -809,7 +809,7 @@ mod tests {
         for y in 0..SUBDIV {
             for x in 0..SUBDIV {
                 assert_eq!(
-                    NodeCoords::<2>::from_point([(origin + x).into(), (origin + y).into()], 0)
+                    CellCoords::<2>::from_point([(origin + x).into(), (origin + y).into()], 0)
                         .index_in_parent(),
                     (y * SUBDIV + x) as usize
                 );
@@ -819,7 +819,7 @@ mod tests {
 
     #[test]
     fn index_in_parent_mid() {
-        assert_eq!(NodeCoords::<1>::from_point([5], 2).index_in_parent(), 1);
+        assert_eq!(CellCoords::<1>::from_point([5], 2).index_in_parent(), 1);
     }
 
     #[test]
