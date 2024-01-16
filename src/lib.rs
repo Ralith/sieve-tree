@@ -407,11 +407,7 @@ impl<const DIM: usize> CellCoords<DIM> {
     fn index_in_parent(&self) -> usize {
         let extent = cell_extent(self.level);
         let local_coords = self.min.map(|x| (x / extent) % SUBDIV as u64);
-        local_coords
-            .into_iter()
-            .enumerate()
-            .map(|(i, x)| x as usize * (SUBDIV as usize).pow(i as u32))
-            .sum()
+        index_from_local_coords(&local_coords, SUBDIV.into())
     }
 
     fn children_overlapping(&self, bounds: &TreeBounds<DIM>) -> Option<NodesWithin<DIM>> {
@@ -517,11 +513,7 @@ const fn cell_extent(level: u32) -> u64 {
 fn child_index_at_level<const DIM: usize>(point: [u64; DIM], level: u32) -> usize {
     let extent = cell_extent(level);
     let local_coords = point.map(|x| (x / extent) % SUBDIV as u64);
-    local_coords
-        .into_iter()
-        .enumerate()
-        .map(|(i, x)| x as usize * (SUBDIV as usize).pow(i as u32))
-        .sum()
+    index_from_local_coords(&local_coords, SUBDIV.into())
 }
 
 /// Compute the lowest level a value with maximum bounding box edge length `extent` may occupy
@@ -589,13 +581,7 @@ impl<const DIM: usize> TreeBounds<DIM> {
             return None;
         }
         let local_coords = self.min.map(|x| (x / level_extent) % SUBDIV as u64);
-        Some(
-            local_coords
-                .into_iter()
-                .enumerate()
-                .map(|(i, x)| x as usize * (SUBDIV as usize).pow(i as u32))
-                .sum(),
-        )
+        Some(index_from_local_coords(&local_coords, SUBDIV.into()))
     }
 
     pub fn intersects(&self, other: &Self) -> bool {
@@ -747,6 +733,15 @@ fn ensure_children<const DIM: usize>(children: &mut Option<Box<[Node<DIM>]>>) ->
 struct Element<T> {
     value: T,
     next: Option<usize>,
+}
+
+/// Index of coordinates in a cuboidal `grid_size.pow(DIM)` grid
+fn index_from_local_coords<const DIM: usize>(local_coords: &[u64; DIM], grid_size: u64) -> usize {
+    local_coords
+        .iter()
+        .enumerate()
+        .map(|(i, &x)| (x * grid_size.pow(i as u32)) as usize)
+        .sum()
 }
 
 /// A tree of branching factor 2 covering the entire range of u64 can be at most this deep before
