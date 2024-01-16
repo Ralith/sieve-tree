@@ -7,10 +7,11 @@ use rand_distr::Exp;
 use sieve_tree::*;
 
 pub fn bench(c: &mut Criterion) {
+    const GRID_EXPONENT: u32 = 3;
     let mut rng = rand::rngs::SmallRng::from_seed([0xAB; 32]);
     c.bench_function("insert 1000 points and balance", |b| {
         b.iter(|| {
-            let mut t = SieveTree::<2, Bounds<2>>::new();
+            let mut t = SieveTree::<2, GRID_EXPONENT, Bounds<2>>::new();
             for _ in 0..1000 {
                 let min = array::from_fn(|_| rng.gen_range(-1_000.0..1_000.0));
                 let b = Bounds { min, max: min };
@@ -22,7 +23,7 @@ pub fn bench(c: &mut Criterion) {
 
     c.bench_function("insert 1000 rects and balance", |b| {
         b.iter(|| {
-            let mut t = SieveTree::<2, Bounds<2>>::new();
+            let mut t = SieveTree::<2, GRID_EXPONENT, Bounds<2>>::new();
             let width_distr = Exp::new(0.5).unwrap();
             for _ in 0..1000 {
                 let min = array::from_fn(|_| rng.gen_range(-1_000.0..1_000.0));

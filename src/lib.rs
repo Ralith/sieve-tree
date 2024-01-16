@@ -9,15 +9,19 @@ use arrayvec::ArrayVec;
 use slab::Slab;
 
 /// A `DIM`-dimensional spatial search tree
+///
+/// Each tree node owns a grid of `2.pow(GRID_EXPONENT).pow(DIM)` cells. Increasing `GRID_EXPONENT`
+/// makes the tree less sparse, which accelerates random access by reducing indirection in exchange
+/// for exponentially increased memory requirements and balance work.
 #[derive(Debug)]
-pub struct SieveTree<const DIM: usize, T> {
+pub struct SieveTree<const DIM: usize, const GRID_EXPONENT: u32, T> {
     /// Length of a level 0 node edge in world space
     scale: f64,
-    root: Option<Root<DIM>>,
+    root: Option<Root<DIM, GRID_EXPONENT>>,
     elements: Slab<Element<T>>,
 }
 
-impl<const DIM: usize, T> SieveTree<DIM, T> {
+impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT, T> {
     /// Create an empty tree
     pub fn new() -> Self {
         Self::default()
@@ -56,7 +60,7 @@ impl<const DIM: usize, T> SieveTree<DIM, T> {
                     .max();
                 let coords = CellCoords {
                     min: [0; DIM],
-                    level: extent.map_or(0, level_for_extent) + GRID_OFFSET,
+                    level: extent.map_or(0, level_for_extent) + GRID_EXPONENT,
                 };
                 let node = &mut self
                     .root
@@ -103,7 +107,7 @@ impl<const DIM: usize, T> SieveTree<DIM, T> {
                     .embedding
                     .bounds_from_world(self.scale, &bounds)
                     .location();
-                find_smallest_parent::<DIM>(root, target)
+                find_smallest_parent(root, target)
             }
         };
         link(&mut self.elements, cell, id);
@@ -122,8 +126,8 @@ impl<const DIM: usize, T> SieveTree<DIM, T> {
         let Some(root) = &mut self.root else {
             return;
         };
-        let mut split = |level, node: &mut Node<DIM>| {
-            if level == GRID_OFFSET {
+        let mut split = |level, node: &mut Node<DIM, GRID_EXPONENT>| {
+            if level == GRID_EXPONENT {
                 // No further subdivision possible
                 return;
             }
@@ -144,12 +148,12 @@ impl<const DIM: usize, T> SieveTree<DIM, T> {
                     let bounds = root
                         .embedding
                         .bounds_from_world(self.scale, &get_bounds(&self.elements[element].value));
-                    let Some(child_node_idx) = bounds.index_in(level - 1) else {
+                    let Some(child_node_idx) = bounds.index_in::<GRID_EXPONENT>(level - 1) else {
                         // Too large to move into children
                         prev_elt = Some(element);
                         continue;
                     };
-                    let cell_idx = grid_index_at_level(bounds.min, level - 1);
+                    let cell_idx = grid_index_at_level::<DIM, GRID_EXPONENT>(bounds.min, level - 1);
                     // Link into child
                     link(
                         &mut self.elements,
@@ -168,7 +172,7 @@ impl<const DIM: usize, T> SieveTree<DIM, T> {
         };
 
         // See comment on `DepthFirstTraversal::queue`
-        let mut stack = ArrayVec::<(u32, &mut [Node<DIM>]), MAX_DEPTH>::new();
+        let mut stack = ArrayVec::<(u32, &mut [Node<DIM, GRID_EXPONENT>]), MAX_DEPTH>::new();
         split(root.coords.level, &mut root.node);
         if let Some(children) = root.node.children.as_mut() {
             stack.push((root.coords.level, children));
@@ -196,7 +200,7 @@ impl<const DIM: usize, T> SieveTree<DIM, T> {
         // A value is guaranteed to be stored in the smallest existing node permitted for it, because:
         // - `insert` only introduces nodes that are siblings of or larger than the root
         // - `balance` always moves all possible elements into newly created child nodes
-        let cell = find_smallest_existing_parent::<DIM>(root, target);
+        let cell = find_smallest_existing_parent(root, target);
         unlink(&mut self.elements, cell, id);
         elt.value
     }
@@ -216,7 +220,7 @@ impl<const DIM: usize, T> SieveTree<DIM, T> {
     }
 
     /// Traverse all elements that might intersect with `bounds`
-    pub fn intersections(&self, bounds: Bounds<DIM>) -> Intersections<'_, DIM, T> {
+    pub fn intersections(&self, bounds: Bounds<DIM>) -> Intersections<'_, DIM, GRID_EXPONENT, T> {
         let bounds = self
             .root
             .as_ref()
@@ -239,14 +243,14 @@ impl<const DIM: usize, T> SieveTree<DIM, T> {
             if bounds.intersects(&root.coords.bounds()) {
                 out.traversal.push(root.coords, &root.node);
                 out.grid = &root.node.grid;
-                out.next_cell = root.coords.cells_overlapping(&bounds);
+                out.next_cell = root.coords.cells_overlapping::<GRID_EXPONENT>(&bounds);
             }
         }
         out
     }
 }
 
-impl<const DIM: usize, T> Default for SieveTree<DIM, T> {
+impl<const DIM: usize, const GRID_EXPONENT: u32, T> Default for SieveTree<DIM, GRID_EXPONENT, T> {
     fn default() -> Self {
         Self {
             // 1cm if world space is in meters. Big enough for the solar system.
@@ -258,13 +262,13 @@ impl<const DIM: usize, T> Default for SieveTree<DIM, T> {
 }
 
 #[derive(Debug)]
-struct Root<const DIM: usize> {
+struct Root<const DIM: usize, const GRID_EXPONENT: u32> {
     embedding: Embedding<DIM>,
     coords: CellCoords<DIM>,
-    node: Node<DIM>,
+    node: Node<DIM, GRID_EXPONENT>,
 }
 
-impl<const DIM: usize> Root<DIM> {
+impl<const DIM: usize, const GRID_EXPONENT: u32> Root<DIM, GRID_EXPONENT> {
     fn world_bounds(&self, scale: f64) -> Bounds<DIM> {
         self.embedding
             .world_bounds_from_tree(scale, &self.coords.bounds())
@@ -272,8 +276,8 @@ impl<const DIM: usize> Root<DIM> {
 }
 
 /// Look up the smallest existing parent of `target`, uprooting the tree if necessary
-fn find_smallest_parent<const DIM: usize>(
-    root: &mut Root<DIM>,
+fn find_smallest_parent<const DIM: usize, const GRID_EXPONENT: u32>(
+    root: &mut Root<DIM, GRID_EXPONENT>,
     target: CellCoords<DIM>,
 ) -> &mut Cell {
     let ancestor = root.coords.smallest_common_ancestor(&target);
@@ -306,12 +310,12 @@ fn find_smallest_parent<const DIM: usize>(
         // Ancestor is target
         (root.coords.level, &mut root.node)
     };
-    let cell_index = grid_index_at_level(target.min, level);
+    let cell_index = grid_index_at_level::<DIM, GRID_EXPONENT>(target.min, level);
     &mut node.grid[cell_index]
 }
 
-fn find_smallest_existing_parent<'a, const DIM: usize>(
-    root: &'a mut Root<DIM>,
+fn find_smallest_existing_parent<'a, const DIM: usize, const GRID_EXPONENT: u32>(
+    root: &'a mut Root<DIM, GRID_EXPONENT>,
     target: CellCoords<DIM>,
 ) -> &'a mut Cell {
     let mut current = &mut root.node;
@@ -325,11 +329,14 @@ fn find_smallest_existing_parent<'a, const DIM: usize>(
             let index = child_index_at_level::<DIM>(target.min, current_level);
             // Hack around borrowck limitation
             unsafe {
-                current = mem::transmute::<&mut Node<DIM>, &'a mut Node<DIM>>(&mut children[index]);
+                current = mem::transmute::<
+                    &mut Node<DIM, GRID_EXPONENT>,
+                    &'a mut Node<DIM, GRID_EXPONENT>,
+                >(&mut children[index]);
             }
         }
     }
-    let cell_index = grid_index_at_level(target.min, current_level);
+    let cell_index = grid_index_at_level::<DIM, GRID_EXPONENT>(target.min, current_level);
     &mut current.grid[cell_index]
 }
 
@@ -425,10 +432,12 @@ impl<const DIM: usize> CellCoords<DIM> {
         index_from_local_coords(&local_coords, SUBDIV.into())
     }
 
-    fn index_in_grid(&self) -> usize {
+    fn index_in_grid<const GRID_EXPONENT: u32>(&self) -> usize {
         let extent = cell_extent(self.level);
-        let local_coords = self.min.map(|x| (x / extent) % GRID_SIZE as u64);
-        index_from_local_coords(&local_coords, GRID_SIZE as u64)
+        let local_coords = self
+            .min
+            .map(|x| (x / extent) % grid_size::<GRID_EXPONENT>() as u64);
+        index_from_local_coords(&local_coords, grid_size::<GRID_EXPONENT>() as u64)
     }
 
     /// Iterator over child nodes in a node that might overlap with `bounds`
@@ -444,8 +453,11 @@ impl<const DIM: usize> CellCoords<DIM> {
     }
 
     /// Iterator over grid cells in a node that might overlap with `bounds`
-    fn cells_overlapping(&self, bounds: &TreeBounds<DIM>) -> CellsWithin<DIM> {
-        let level = self.level - GRID_OFFSET;
+    fn cells_overlapping<const GRID_EXPONENT: u32>(
+        &self,
+        bounds: &TreeBounds<DIM>,
+    ) -> CellsWithin<DIM> {
+        let level = self.level - GRID_EXPONENT;
         let extent = cell_extent(level);
         // Expand search by one unit towards the origin to allow for edge-crossing
         let bounds = bounds.relax(extent);
@@ -559,13 +571,16 @@ fn child_index_at_level<const DIM: usize>(point: [u64; DIM], level: u32) -> usiz
 }
 
 /// Index of the cell containing `point` in the grid of a node at `level`
-fn grid_index_at_level<const DIM: usize>(point: [u64; DIM], level: u32) -> usize {
-    let extent = cell_extent(level - GRID_OFFSET);
-    let local_coords = point.map(|x| (x / extent) % GRID_SIZE as u64);
+fn grid_index_at_level<const DIM: usize, const GRID_EXPONENT: u32>(
+    point: [u64; DIM],
+    level: u32,
+) -> usize {
+    let extent = cell_extent(level - GRID_EXPONENT);
+    let local_coords = point.map(|x| (x / extent) % grid_size::<GRID_EXPONENT>() as u64);
     local_coords
         .into_iter()
         .enumerate()
-        .map(|(i, x)| x as usize * GRID_SIZE.pow(i as u32))
+        .map(|(i, x)| x as usize * grid_size::<GRID_EXPONENT>().pow(i as u32))
         .sum()
 }
 
@@ -625,13 +640,13 @@ impl<const DIM: usize> TreeBounds<DIM> {
     /// Compute the index of the node at `level` containing this rect in its parent's child array,
     /// and the index in the selected node's grid, or `None` if the value must be stored at a higher
     /// level
-    fn index_in(&self, level: u32) -> Option<usize> {
+    fn index_in<const GRID_EXPONENT: u32>(&self, level: u32) -> Option<usize> {
         let Some(max_extent) = self.extents().into_iter().max() else {
             // 0-dimensional case
             return Some(0);
         };
-        let extent = cell_extent(level - GRID_OFFSET);
-        let node_extent = extent * SUBDIV.pow(GRID_OFFSET) as u64;
+        let extent = cell_extent(level - GRID_EXPONENT);
+        let node_extent = extent * SUBDIV.pow(GRID_EXPONENT) as u64;
         if max_extent > extent * u64::from(SUBDIV) {
             return None;
         }
@@ -689,37 +704,39 @@ impl<const DIM: usize> fmt::Display for TreeBounds<DIM> {
 }
 
 #[derive(Default)]
-struct DepthFirstTraversal<'a, const DIM: usize> {
+struct DepthFirstTraversal<'a, const DIM: usize, const GRID_EXPONENT: u32> {
     // By tracking groups of children, rather than individual nodes, we can keep the stack size
     // to O(depth), whereas a naive depth-first traversal would require O(depth * branch^dim).
-    queue: ArrayVec<(CellCoords<DIM>, &'a [Node<DIM>]), MAX_DEPTH>,
+    queue: ArrayVec<(CellCoords<DIM>, &'a [Node<DIM, GRID_EXPONENT>]), MAX_DEPTH>,
 }
 
-impl<'a, const DIM: usize> DepthFirstTraversal<'a, DIM> {
-    fn push(&mut self, coords: CellCoords<DIM>, node: &'a Node<DIM>) {
+impl<'a, const DIM: usize, const GRID_EXPONENT: u32> DepthFirstTraversal<'a, DIM, GRID_EXPONENT> {
+    fn push(&mut self, coords: CellCoords<DIM>, node: &'a Node<DIM, GRID_EXPONENT>) {
         if let Some(ref children) = node.children {
             self.queue.push((coords, children));
         }
     }
 
-    fn pop(&mut self) -> Option<(CellCoords<DIM>, &'a [Node<DIM>])> {
+    fn pop(&mut self) -> Option<(CellCoords<DIM>, &'a [Node<DIM, GRID_EXPONENT>])> {
         self.queue.pop()
     }
 }
 
 /// Iterator over nodes that might intersect with a [`Bounds`]
-pub struct Intersections<'a, const DIM: usize, T> {
+pub struct Intersections<'a, const DIM: usize, const GRID_EXPONENT: u32, T> {
     bounds: TreeBounds<DIM>,
     elements: &'a Slab<Element<T>>,
-    traversal: DepthFirstTraversal<'a, DIM>,
+    traversal: DepthFirstTraversal<'a, DIM, GRID_EXPONENT>,
     next_child: CellsWithin<DIM>,
-    children: &'a [Node<DIM>],
+    children: &'a [Node<DIM, GRID_EXPONENT>],
     next_cell: CellsWithin<DIM>,
     grid: &'a [Cell],
     next_element: ElementIter,
 }
 
-impl<'a, const DIM: usize, T> Iterator for Intersections<'a, DIM, T> {
+impl<'a, const DIM: usize, const GRID_EXPONENT: u32, T> Iterator
+    for Intersections<'a, DIM, GRID_EXPONENT, T>
+{
     type Item = (usize, &'a T);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -731,8 +748,9 @@ impl<'a, const DIM: usize, T> Iterator for Intersections<'a, DIM, T> {
             }
             // If the current cell has no elements, find a new cell
             if let Some(coords) = self.next_cell.next() {
-                self.next_element =
-                    ElementIter::new(self.grid[coords.index_in_grid()].first_element);
+                self.next_element = ElementIter::new(
+                    self.grid[coords.index_in_grid::<GRID_EXPONENT>()].first_element,
+                );
                 continue;
             }
             // If we're out of cells, get the next child node
@@ -741,7 +759,7 @@ impl<'a, const DIM: usize, T> Iterator for Intersections<'a, DIM, T> {
                 let child = &self.children[index];
                 self.traversal.push(coords, child);
                 self.grid = &child.grid;
-                self.next_cell = coords.cells_overlapping(&self.bounds);
+                self.next_cell = coords.cells_overlapping::<GRID_EXPONENT>(&self.bounds);
             }
             // If we're out of child nodes, get the next group from the queue
             let (coords, children) = self.traversal.pop()?;
@@ -752,16 +770,16 @@ impl<'a, const DIM: usize, T> Iterator for Intersections<'a, DIM, T> {
 }
 
 #[derive(Debug)]
-struct Node<const DIM: usize> {
-    // This should become `Box<[Node<DIM>; SUBDIV.pow(DIM)]>` as soon as Rust permits that
-    children: Option<Box<[Node<DIM>]>>,
-    // This should become `[Node<DIM>; SUBDIV.pow(GRID_OFFSET).pow(DIM)]` as soon as Rust permits that
+struct Node<const DIM: usize, const GRID_EXPONENT: u32> {
+    // This should become `Box<[Node<DIM, GRID_EXPONENT>; SUBDIV.pow(DIM)]>` as soon as Rust permits that
+    children: Option<Box<[Node<DIM, GRID_EXPONENT>]>>,
+    // This should become `[Node<DIM, GRID_EXPONENT>; SUBDIV.pow(GRID_EXPONENT).pow(DIM)]` as soon as Rust permits that
     grid: Box<[Cell]>,
 }
 
-fn ensure_children<const DIM: usize>(
-    children: &mut Option<Box<[Node<DIM>]>>,
-) -> (bool, &mut [Node<DIM>]) {
+fn ensure_children<const DIM: usize, const GRID_EXPONENT: u32>(
+    children: &mut Option<Box<[Node<DIM, GRID_EXPONENT>]>>,
+) -> (bool, &mut [Node<DIM, GRID_EXPONENT>]) {
     match children {
         Some(x) => (false, x),
         None => (
@@ -775,11 +793,11 @@ fn ensure_children<const DIM: usize>(
     }
 }
 
-impl<const DIM: usize> Default for Node<DIM> {
+impl<const DIM: usize, const GRID_EXPONENT: u32> Default for Node<DIM, GRID_EXPONENT> {
     fn default() -> Self {
         Self {
             children: None,
-            grid: (0..SUBDIV.pow(GRID_OFFSET).pow(DIM as u32))
+            grid: (0..SUBDIV.pow(GRID_EXPONENT).pow(DIM as u32))
                 .map(|_| Cell::default())
                 .collect(),
         }
@@ -817,12 +835,9 @@ const MAX_DEPTH: usize = u64::MAX.ilog(2) as usize;
 /// `SUBDIV.pow(DIM)` children.
 const SUBDIV: u32 = 2;
 
-/// Number of subdivision levels between a node and its grid
-///
-/// A node owns a grid of `SUBDIV.pow(GRID_OFFSET).pow(DIM)` cells. Larger values make the tree less
-/// sparse, which accelerates random access in exchange for increased memory use.
-const GRID_OFFSET: u32 = 2;
-const GRID_SIZE: usize = SUBDIV.pow(GRID_OFFSET) as usize;
+const fn grid_size<const GRID_EXPONENT: u32>() -> usize {
+    SUBDIV.pow(GRID_EXPONENT) as usize
+}
 
 #[derive(Default)]
 struct ElementIter {
@@ -890,16 +905,16 @@ mod tests {
 
     #[test]
     fn balance() {
-        let mut t = SieveTree::<2, Bounds<2>>::new();
+        let mut t = SieveTree::<2, 2, Bounds<2>>::new();
         for y in -5..5 {
             for x in -5..5 {
                 let b = Bounds::point([x as f64, y as f64]);
                 t.insert(b, b);
-                validate::<2, Bounds<2>>(&t);
+                validate::<2, 2, Bounds<2>>(&t);
             }
         }
         t.balance(1, |&x| x);
-        validate::<2, Bounds<2>>(&t);
+        validate::<2, 2, Bounds<2>>(&t);
         let mut nonempty_cells = 0;
         for (coords, node) in nodes(&t) {
             for cell in &*node.grid {
@@ -914,7 +929,7 @@ mod tests {
 
     #[test]
     fn smoke() {
-        let mut t = SieveTree::<2, Bounds<2>>::new();
+        let mut t = SieveTree::<2, 2, Bounds<2>>::new();
         let b = Bounds {
             min: [4.0, 4.0],
             max: [107.0, 107.0],
@@ -947,9 +962,9 @@ mod tests {
         );
     }
 
-    fn nodes<const DIM: usize, T>(
-        tree: &SieveTree<DIM, T>,
-    ) -> impl Iterator<Item = (u32, &'_ Node<DIM>)> {
+    fn nodes<const DIM: usize, const GRID_EXPONENT: u32, T>(
+        tree: &SieveTree<DIM, GRID_EXPONENT, T>,
+    ) -> impl Iterator<Item = (u32, &'_ Node<DIM, GRID_EXPONENT>)> {
         let mut stack = alloc::vec::Vec::new();
         if let Some(root) = &tree.root {
             stack.push((root.coords.level, &root.node));
@@ -965,7 +980,9 @@ mod tests {
 
     /// Assert that each element is the right cell
     #[track_caller]
-    fn validate<const DIM: usize, T>(tree: &SieveTree<DIM, Bounds<DIM>>) {
+    fn validate<const DIM: usize, const GRID_EXPONENT: u32, T>(
+        tree: &SieveTree<DIM, GRID_EXPONENT, Bounds<DIM>>,
+    ) {
         let mut stack = alloc::vec::Vec::new();
         if let Some(root) = &tree.root {
             stack.push((root.coords, &root.node));
@@ -983,12 +1000,14 @@ mod tests {
                 }
             }
 
-            for (local, cell) in grid::<DIM>(GRID_SIZE as u64).zip(node.grid.as_ref()) {
-                let extent = cell_extent(coords.level - GRID_OFFSET);
+            for (local, cell) in
+                grid::<DIM>(grid_size::<GRID_EXPONENT>() as u64).zip(node.grid.as_ref())
+            {
+                let extent = cell_extent(coords.level - GRID_EXPONENT);
                 let parent_extent = extent * SUBDIV as u64;
                 let cell_coords = CellCoords::<DIM> {
                     min: array::from_fn(|i| coords.min[i] + local[i] * extent),
-                    level: coords.level - GRID_OFFSET,
+                    level: coords.level - GRID_EXPONENT,
                 };
                 let cell_bounds = cell_coords.bounds();
                 let mut iter = ElementIter::new(cell.first_element);
