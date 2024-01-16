@@ -118,14 +118,10 @@ impl<const DIM: usize, T> SieveTree<DIM, T> {
         elements_per_node: usize,
         mut get_bounds: impl FnMut(&T) -> Bounds<DIM>,
     ) {
-        fn split<const DIM: usize, T>(
-            scale: f64,
-            embedding: &Embedding<DIM>,
-            elements: &mut Slab<Element<T>>,
-            level: u32,
-            node: &mut Node<DIM>,
-            mut get_bounds: impl FnMut(&T) -> Bounds<DIM>,
-        ) {
+        let Some(root) = &mut self.root else {
+            return;
+        };
+        let mut split = |level, node: &mut Node<DIM>| {
             if level == 0 {
                 return;
             }
@@ -133,61 +129,46 @@ impl<const DIM: usize, T> SieveTree<DIM, T> {
             let mut next_elt = node.first_element;
             let mut prev_elt = None;
             while let Some(element) = next_elt {
-                next_elt = elements[element].next;
-                let bounds =
-                    embedding.bounds_from_world(scale, &get_bounds(&elements[element].value));
+                next_elt = self.elements[element].next;
+                let bounds = root
+                    .embedding
+                    .bounds_from_world(self.scale, &get_bounds(&self.elements[element].value));
                 let Some(index) = bounds.index_in(level - 1) else {
                     // Too large to move into children
                     prev_elt = Some(element);
                     continue;
                 };
                 // Link into child
-                link(elements, &mut children[index], element);
+                link(&mut self.elements, &mut children[index], element);
                 // Unlink from `node`
                 let prev_link = match prev_elt {
                     None => &mut node.first_element,
-                    Some(x) => &mut elements[x].next,
+                    Some(x) => &mut self.elements[x].next,
                 };
                 *prev_link = next_elt;
                 node.elements -= 1;
             }
+        };
+
+        // See comment on `DepthFirstTraversal::queue`
+        let mut stack = ArrayVec::<(u32, &mut [Node<DIM>]), MAX_DEPTH>::new();
+        if root.node.elements > elements_per_node {
+            split(root.coords.level, &mut root.node);
         }
+        if let Some(children) = root.node.children.as_mut() {
+            stack.push((root.coords.level, children));
+        }
+        while let Some((level, children)) = stack.pop() {
+            let level = level - 1;
+            for child in children.iter_mut() {
+                // Balance elements in `child`
+                if child.elements > elements_per_node {
+                    split(level, child);
+                }
 
-        if let Some(root) = &mut self.root {
-            // See comment on `DepthFirstTraversal::queue`
-            let mut stack = ArrayVec::<(u32, &mut [Node<DIM>]), MAX_DEPTH>::new();
-            if root.node.elements > elements_per_node {
-                split::<DIM, T>(
-                    self.scale,
-                    &root.embedding,
-                    &mut self.elements,
-                    root.coords.level,
-                    &mut root.node,
-                    &mut get_bounds,
-                );
-            }
-            if let Some(children) = root.node.children.as_mut() {
-                stack.push((root.coords.level, children));
-            }
-            while let Some((level, children)) = stack.pop() {
-                let level = level - 1;
-                for child in children.iter_mut() {
-                    // Balance elements in `child`
-                    if child.elements > elements_per_node {
-                        split::<DIM, T>(
-                            self.scale,
-                            &root.embedding,
-                            &mut self.elements,
-                            level,
-                            child,
-                            &mut get_bounds,
-                        );
-                    }
-
-                    // Queue grandchildren for balancing
-                    if let Some(grandchildren) = child.children.as_mut() {
-                        stack.push((level, grandchildren));
-                    }
+                // Queue grandchildren for balancing
+                if let Some(grandchildren) = child.children.as_mut() {
+                    stack.push((level, grandchildren));
                 }
             }
         }
