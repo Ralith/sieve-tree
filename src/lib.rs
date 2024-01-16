@@ -123,13 +123,13 @@ impl<const DIM: usize, T> SieveTree<DIM, T> {
             embedding: &Embedding<DIM>,
             elements: &mut Slab<Element<T>>,
             level: u32,
-            node: &mut Node,
+            node: &mut Node<DIM>,
             mut get_bounds: impl FnMut(&T) -> Bounds<DIM>,
         ) {
             if level == 0 {
                 return;
             }
-            let children = ensure_children::<DIM>(&mut node.children);
+            let children = ensure_children(&mut node.children);
             let mut next_elt = node.first_element;
             let mut prev_elt = None;
             while let Some(element) = next_elt {
@@ -155,7 +155,7 @@ impl<const DIM: usize, T> SieveTree<DIM, T> {
 
         if let Some(root) = &mut self.root {
             // See comment on `DepthFirstTraversal::queue`
-            let mut stack = ArrayVec::<(u32, &mut [Node]), MAX_DEPTH>::new();
+            let mut stack = ArrayVec::<(u32, &mut [Node<DIM>]), MAX_DEPTH>::new();
             if root.node.elements > elements_per_node {
                 split::<DIM, T>(
                     self.scale,
@@ -263,7 +263,7 @@ impl<const DIM: usize, T> Default for SieveTree<DIM, T> {
 struct Root<const DIM: usize> {
     embedding: Embedding<DIM>,
     coords: NodeCoords<DIM>,
-    node: Node,
+    node: Node<DIM>,
 }
 
 impl<const DIM: usize> Root<DIM> {
@@ -277,7 +277,7 @@ impl<const DIM: usize> Root<DIM> {
 fn find_smallest_parent<const DIM: usize>(
     root: &mut Root<DIM>,
     target: NodeCoords<DIM>,
-) -> &mut Node {
+) -> &mut Node<DIM> {
     let ancestor = root.coords.smallest_common_ancestor(&target);
     if ancestor == root.coords {
         return find_smallest_existing_parent(root, target);
@@ -290,7 +290,7 @@ fn find_smallest_parent<const DIM: usize>(
     let mut current = &mut root.node;
     let mut current_level = root.coords.level;
     while current_level > old_root_coords.level {
-        let children = ensure_children::<DIM>(&mut current.children);
+        let children = ensure_children(&mut current.children);
         current_level -= 1;
         let index = child_index_at_level::<DIM>(old_root_coords.min, current_level);
         current = &mut children[index];
@@ -310,7 +310,7 @@ fn find_smallest_parent<const DIM: usize>(
 fn find_smallest_existing_parent<'a, const DIM: usize>(
     root: &'a mut Root<DIM>,
     target: NodeCoords<DIM>,
-) -> &'a mut Node {
+) -> &'a mut Node<DIM> {
     let mut current = &mut root.node;
     let mut current_level = root.coords.level;
     {
@@ -322,7 +322,7 @@ fn find_smallest_existing_parent<'a, const DIM: usize>(
             let index = child_index_at_level::<DIM>(target.min, current_level);
             // Hack around borrowck limitation
             unsafe {
-                current = mem::transmute::<&mut Node, &'a mut Node>(&mut children[index]);
+                current = mem::transmute::<&mut Node<DIM>, &'a mut Node<DIM>>(&mut children[index]);
             }
         }
     }
@@ -330,14 +330,22 @@ fn find_smallest_existing_parent<'a, const DIM: usize>(
 }
 
 /// Add `element` to `node`
-fn link<T>(elements: &mut Slab<Element<T>>, node: &mut Node, element: usize) {
+fn link<const DIM: usize, T>(
+    elements: &mut Slab<Element<T>>,
+    node: &mut Node<DIM>,
+    element: usize,
+) {
     let prev = mem::replace(&mut node.first_element, Some(element));
     elements[element].next = prev;
     node.elements += 1;
 }
 
 /// Remove `element` from `node`
-fn unlink<T>(elements: &mut Slab<Element<T>>, node: &mut Node, element: usize) {
+fn unlink<const DIM: usize, T>(
+    elements: &mut Slab<Element<T>>,
+    node: &mut Node<DIM>,
+    element: usize,
+) {
     let successor = elements[element].next;
     let mut link = &mut node.first_element;
     loop {
@@ -645,9 +653,9 @@ struct DepthFirstTraversal<ChildIter, Context> {
 impl<'a, const DIM: usize, I> Iterator for DepthFirstTraversal<I, I::Context>
 where
     // `+ Iterator<...>` is redundant here, but rustc insists...
-    I: NodeIter<'a, DIM> + Iterator<Item = (NodeCoords<DIM>, &'a Node)>,
+    I: NodeIter<'a, DIM> + Iterator<Item = (NodeCoords<DIM>, &'a Node<DIM>)>,
 {
-    type Item = (NodeCoords<DIM>, &'a Node);
+    type Item = (NodeCoords<DIM>, &'a Node<DIM>);
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -679,19 +687,19 @@ where
 
 trait NodeIter<'a, const DIM: usize>
 where
-    Self: Iterator<Item = (NodeCoords<DIM>, &'a Node)>,
+    Self: Iterator<Item = (NodeCoords<DIM>, &'a Node<DIM>)>,
 {
     type Context;
-    fn new(context: &Self::Context, coords: NodeCoords<DIM>, children: &'a [Node]) -> Self;
+    fn new(context: &Self::Context, coords: NodeCoords<DIM>, children: &'a [Node<DIM>]) -> Self;
 }
 
 struct IntersectingChildren<'a, const DIM: usize> {
-    children: &'a [Node],
+    children: &'a [Node<DIM>],
     inner: NodesWithin<DIM>,
 }
 
 impl<'a, const DIM: usize> Iterator for IntersectingChildren<'a, DIM> {
-    type Item = (NodeCoords<DIM>, &'a Node);
+    type Item = (NodeCoords<DIM>, &'a Node<DIM>);
 
     fn next(&mut self) -> Option<Self::Item> {
         let child_coords = self.inner.next()?;
@@ -703,7 +711,7 @@ impl<'a, const DIM: usize> Iterator for IntersectingChildren<'a, DIM> {
 impl<'a, const DIM: usize> NodeIter<'a, DIM> for IntersectingChildren<'a, DIM> {
     type Context = TreeBounds<DIM>;
 
-    fn new(bounds: &TreeBounds<DIM>, coords: NodeCoords<DIM>, children: &'a [Node]) -> Self {
+    fn new(bounds: &TreeBounds<DIM>, coords: NodeCoords<DIM>, children: &'a [Node<DIM>]) -> Self {
         Self {
             children,
             inner: coords.children_overlapping(bounds).unwrap(),
@@ -737,16 +745,16 @@ impl<'a, const DIM: usize, T> Iterator for Intersections<'a, DIM, T> {
 }
 
 #[derive(Debug, Default)]
-struct Node {
+struct Node<const DIM: usize> {
     // This should become `Box<[Node; SUBDIV.pow(DIM)]>` as soon as Rust permits that
-    children: Option<Box<[Node]>>,
+    children: Option<Box<[Node<DIM>]>>,
     /// Length of elements associated directly with this node
     // TODO: Count only unsieved elements
     elements: usize,
     first_element: Option<usize>,
 }
 
-fn ensure_children<const DIM: usize>(children: &mut Option<Box<[Node]>>) -> &mut [Node] {
+fn ensure_children<const DIM: usize>(children: &mut Option<Box<[Node<DIM>]>>) -> &mut [Node<DIM>] {
     children.get_or_insert_with(|| {
         (0..SUBDIV.pow(DIM as u32) as usize)
             .map(|_| Node::default())
@@ -873,7 +881,7 @@ mod tests {
 
     fn nodes<const DIM: usize, T>(
         tree: &SieveTree<DIM, T>,
-    ) -> impl Iterator<Item = (u32, &'_ Node)> {
+    ) -> impl Iterator<Item = (u32, &'_ Node<DIM>)> {
         let mut stack = alloc::vec::Vec::new();
         if let Some(root) = &tree.root {
             stack.push((root.coords.level, &root.node));
