@@ -217,26 +217,29 @@ impl<const DIM: usize, T> SieveTree<DIM, T> {
 
     /// Traverse all elements that might intersect with `bounds`
     pub fn intersections(&self, bounds: Bounds<DIM>) -> Intersections<'_, DIM, T> {
+        let bounds = self
+            .root
+            .as_ref()
+            .map(|x| x.embedding.bounds_from_world(self.scale, &bounds))
+            .unwrap_or(TreeBounds {
+                min: [0; DIM],
+                max: [0; DIM],
+            });
         let mut out = Intersections {
+            bounds,
             elements: &self.elements,
             traversal: DepthFirstTraversal::default(),
+            next_child: CellsWithin::default(),
+            children: &[],
             next_cell: CellsWithin::default(),
             next_element: ElementIter::default(),
             grid: &[],
         };
         if let Some(ref root) = self.root {
-            let bounds = root.embedding.bounds_from_world(self.scale, &bounds);
             if bounds.intersects(&root.coords.bounds()) {
+                out.traversal.push(root.coords, &root.node);
                 out.grid = &root.node.grid;
-                out.next_cell = CellsWithin::new(bounds, root.coords.level - GRID_OFFSET);
-                if let Some(children) = root.node.children.as_ref() {
-                    out.traversal = DepthFirstTraversal {
-                        queue: [IntersectingChildren::new(&bounds, root.coords, children)]
-                            .into_iter()
-                            .collect(),
-                        context: bounds,
-                    };
-                }
+                out.next_cell = root.coords.cells_overlapping(&bounds);
             }
         }
         out
@@ -428,6 +431,7 @@ impl<const DIM: usize> CellCoords<DIM> {
         index_from_local_coords(&local_coords, GRID_SIZE as u64)
     }
 
+    /// Iterator over child nodes in a node that might overlap with `bounds`
     fn children_overlapping(&self, bounds: &TreeBounds<DIM>) -> Option<CellsWithin<DIM>> {
         let level = self.level.checked_sub(1)?;
         let extent = cell_extent(level);
@@ -437,6 +441,18 @@ impl<const DIM: usize> CellCoords<DIM> {
         // Clamp lower bound to node boundaries
         range.min = range.min.map(|x| x - x % extent);
         Some(CellsWithin::new(range, level))
+    }
+
+    /// Iterator over grid cells in a node that might overlap with `bounds`
+    fn cells_overlapping(&self, bounds: &TreeBounds<DIM>) -> CellsWithin<DIM> {
+        let level = self.level - GRID_OFFSET;
+        let extent = cell_extent(level);
+        // Expand search by one unit towards the origin to allow for edge-crossing
+        let bounds = bounds.relax(extent);
+        let mut range = self.bounds().intersection(&bounds);
+        // Clamp lower bound to node boundaries
+        range.min = range.min.map(|x| x - x % extent);
+        CellsWithin::new(range, level)
     }
 
     fn smallest_common_ancestor(&self, other: &Self) -> Self {
@@ -672,89 +688,35 @@ impl<const DIM: usize> fmt::Display for TreeBounds<DIM> {
     }
 }
 
-struct DepthFirstTraversal<ChildIter, Context> {
+#[derive(Default)]
+struct DepthFirstTraversal<'a, const DIM: usize> {
     // By tracking groups of children, rather than individual nodes, we can keep the stack size
     // to O(depth), whereas a naive depth-first traversal would require O(depth * branch^dim).
-    queue: ArrayVec<ChildIter, MAX_DEPTH>,
-    context: Context,
+    queue: ArrayVec<(CellCoords<DIM>, &'a [Node<DIM>]), MAX_DEPTH>,
 }
 
-impl<'a, const DIM: usize, I> Iterator for DepthFirstTraversal<I, I::Context>
-where
-    // `+ Iterator<...>` is redundant here, but rustc insists...
-    I: NodeIter<'a, DIM> + Iterator<Item = (CellCoords<DIM>, &'a Node<DIM>)>,
-{
-    type Item = (CellCoords<DIM>, &'a Node<DIM>);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            let next = self.queue.last_mut()?;
-            let Some((coords, node)) = next.next() else {
-                self.queue.pop();
-                continue;
-            };
-            if let Some(children) = node.children.as_ref() {
-                self.queue
-                    .push(NodeIter::new(&self.context, coords, children));
-            }
-            return Some((coords, node));
+impl<'a, const DIM: usize> DepthFirstTraversal<'a, DIM> {
+    fn push(&mut self, coords: CellCoords<DIM>, node: &'a Node<DIM>) {
+        if let Some(ref children) = node.children {
+            self.queue.push((coords, children));
         }
     }
-}
 
-impl<I, C> Default for DepthFirstTraversal<I, C>
-where
-    C: Default,
-{
-    fn default() -> Self {
-        Self {
-            queue: ArrayVec::new(),
-            context: C::default(),
-        }
-    }
-}
-
-trait NodeIter<'a, const DIM: usize>
-where
-    Self: Iterator<Item = (CellCoords<DIM>, &'a Node<DIM>)>,
-{
-    type Context;
-    fn new(context: &Self::Context, coords: CellCoords<DIM>, children: &'a [Node<DIM>]) -> Self;
-}
-
-struct IntersectingChildren<'a, const DIM: usize> {
-    children: &'a [Node<DIM>],
-    inner: CellsWithin<DIM>,
-}
-
-impl<'a, const DIM: usize> Iterator for IntersectingChildren<'a, DIM> {
-    type Item = (CellCoords<DIM>, &'a Node<DIM>);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let child_coords = self.inner.next()?;
-        let child = &self.children[child_coords.index_in_parent()];
-        Some((child_coords, child))
-    }
-}
-
-impl<'a, const DIM: usize> NodeIter<'a, DIM> for IntersectingChildren<'a, DIM> {
-    type Context = TreeBounds<DIM>;
-
-    fn new(bounds: &TreeBounds<DIM>, coords: CellCoords<DIM>, children: &'a [Node<DIM>]) -> Self {
-        Self {
-            children,
-            inner: coords.children_overlapping(bounds).unwrap(),
-        }
+    fn pop(&mut self) -> Option<(CellCoords<DIM>, &'a [Node<DIM>])> {
+        self.queue.pop()
     }
 }
 
 /// Iterator over nodes that might intersect with a [`Bounds`]
 pub struct Intersections<'a, const DIM: usize, T> {
+    bounds: TreeBounds<DIM>,
     elements: &'a Slab<Element<T>>,
-    traversal: DepthFirstTraversal<IntersectingChildren<'a, DIM>, TreeBounds<DIM>>,
+    traversal: DepthFirstTraversal<'a, DIM>,
+    next_child: CellsWithin<DIM>,
+    children: &'a [Node<DIM>],
     next_cell: CellsWithin<DIM>,
-    next_element: ElementIter,
     grid: &'a [Cell],
+    next_element: ElementIter,
 }
 
 impl<'a, const DIM: usize, T> Iterator for Intersections<'a, DIM, T> {
@@ -773,9 +735,18 @@ impl<'a, const DIM: usize, T> Iterator for Intersections<'a, DIM, T> {
                     ElementIter::new(self.grid[coords.index_in_grid()].first_element);
                 continue;
             }
-            // If we're out of cells, get the next node
-            let (_, node) = self.traversal.next()?;
-            self.grid = &node.grid;
+            // If we're out of cells, get the next child node
+            if let Some(coords) = self.next_child.next() {
+                let index = coords.index_in_parent();
+                let child = &self.children[index];
+                self.traversal.push(coords, child);
+                self.grid = &child.grid;
+                self.next_cell = coords.cells_overlapping(&self.bounds);
+            }
+            // If we're out of child nodes, get the next group from the queue
+            let (coords, children) = self.traversal.pop()?;
+            self.children = children;
+            self.next_child = coords.children_overlapping(&self.bounds).unwrap();
         }
     }
 }
@@ -836,11 +807,6 @@ fn index_from_local_coords<const DIM: usize>(local_coords: &[u64; DIM], grid_siz
         .enumerate()
         .map(|(i, &x)| (x * grid_size.pow(i as u32)) as usize)
         .sum()
-}
-
-fn grid_coords_in<const DIM: usize>(point: &[u64; DIM], level: u32) -> [u64; DIM] {
-    let cell_extent = cell_extent(level);
-    array::from_fn(|i| (point[i] / cell_extent) % GRID_SIZE as u64)
 }
 
 /// A tree of branching factor 2 covering the entire range of u64 can be at most this deep before
