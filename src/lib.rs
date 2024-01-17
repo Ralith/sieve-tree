@@ -456,11 +456,7 @@ fn grid_index_at_level<const DIM: usize, const GRID_EXPONENT: u32>(
 ) -> usize {
     let extent = cell_extent(level - GRID_EXPONENT);
     let local_coords = point.map(|x| (x / extent) % grid_size::<GRID_EXPONENT>() as u64);
-    local_coords
-        .into_iter()
-        .enumerate()
-        .map(|(i, x)| x as usize * grid_size::<GRID_EXPONENT>().pow(i as u32))
-        .sum()
+    index_from_local_coords(&local_coords, grid_size::<GRID_EXPONENT>() as u64)
 }
 
 /// Compute the lowest level a value with maximum bounding box edge length `extent` may occupy
