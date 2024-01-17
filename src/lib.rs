@@ -106,7 +106,7 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
                 let target = root
                     .embedding
                     .bounds_from_world(self.scale, &bounds)
-                    .location();
+                    .location::<GRID_EXPONENT>();
                 find_smallest_parent(root, target)
             }
         };
@@ -207,7 +207,7 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
         let elt = self.elements.remove(id);
         let root = self.root.as_mut().unwrap();
         let bounds = root.embedding.bounds_from_world(self.scale, &bounds);
-        let target = bounds.location();
+        let target = bounds.location::<GRID_EXPONENT>();
         // A value is guaranteed to be stored in the smallest existing node permitted for it, because:
         // - `insert` only introduces nodes that are siblings of or larger than the root
         // - `balance` always moves all possible elements into newly created child nodes
@@ -647,9 +647,9 @@ impl<const DIM: usize> TreeBounds<DIM> {
         array::from_fn(|i| self.max[i] - self.min[i] + 1)
     }
 
-    /// Find the smallest node cell a value with these bounds could be stored in, i.e. the largest
-    /// level with cells smaller than this `Bounds`'s extents on any dimension
-    fn location(&self) -> CellCoords<DIM> {
+    /// Find the smallest node a value with these bounds could be stored in, i.e. the largest level
+    /// of nodes with cells smaller than this `Bounds`'s extents on any dimension
+    fn location<const GRID_EXPONENT: u32>(&self) -> CellCoords<DIM> {
         let Some(extent) = self.extents().into_iter().max() else {
             // 0-dimensional case
             return CellCoords {
@@ -659,7 +659,7 @@ impl<const DIM: usize> TreeBounds<DIM> {
         };
 
         let level = level_for_extent(extent);
-        CellCoords::from_point(self.min, level)
+        CellCoords::from_point(self.min, level + GRID_EXPONENT)
     }
 
     /// Compute the index of the node at `level` containing this rect in its parent's child array,
