@@ -3,10 +3,16 @@
 extern crate alloc;
 
 use alloc::boxed::Box;
-use core::{array, fmt, mem};
+use core::{array, mem};
 
 use arrayvec::ArrayVec;
 use slab::Slab;
+
+mod cell_coords;
+use cell_coords::{cell_extent, CellCoords, CellsWithin};
+
+mod tree_bounds;
+use tree_bounds::TreeBounds;
 
 /// A `DIM`-dimensional spatial search tree
 ///
@@ -434,171 +440,6 @@ impl<const DIM: usize> Embedding<DIM> {
     }
 }
 
-/// Identifies a single cell, anywhere in tree space
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
-struct CellCoords<const DIM: usize> {
-    /// Point in this cell with the smallest coordinates on each dimension
-    min: [u64; DIM],
-    /// Exponent of `SUBDIV` which is the cell's extent in each dimension
-    level: u32,
-}
-
-impl<const DIM: usize> CellCoords<DIM> {
-    fn from_point(point: [u64; DIM], level: u32) -> Self {
-        let extent = cell_extent(level);
-        Self {
-            min: point.map(|x| (x / extent) * extent),
-            level,
-        }
-    }
-
-    fn bounds(&self) -> TreeBounds<DIM> {
-        let extent = cell_extent(self.level);
-        TreeBounds {
-            min: self.min,
-            max: self.min.map(|x| x + extent - 1),
-        }
-    }
-
-    fn parent(&self) -> Self {
-        Self::from_point(self.min, self.level + 1)
-    }
-
-    fn index_in_parent(&self) -> usize {
-        let extent = cell_extent(self.level);
-        let local_coords = self.min.map(|x| (x / extent) % SUBDIV as u64);
-        index_from_local_coords(&local_coords, SUBDIV.into())
-    }
-
-    fn index_in_grid<const GRID_EXPONENT: u32>(&self) -> usize {
-        let extent = cell_extent(self.level);
-        let local_coords = self
-            .min
-            .map(|x| (x / extent) % grid_size::<GRID_EXPONENT>() as u64);
-        index_from_local_coords(&local_coords, grid_size::<GRID_EXPONENT>() as u64)
-    }
-
-    /// Iterator over child nodes in a node that might overlap with `bounds`
-    fn children_overlapping(&self, bounds: &TreeBounds<DIM>) -> Option<CellsWithin<DIM>> {
-        let level = self.level.checked_sub(1)?;
-        let extent = cell_extent(level);
-        // Expand search by one unit towards the origin to allow for edge-crossing
-        let bounds = bounds.relax(extent);
-        let mut range = self.bounds().intersection(&bounds);
-        // Clamp lower bound to node boundaries
-        range.min = range.min.map(|x| x - x % extent);
-        Some(CellsWithin::new(range, level))
-    }
-
-    /// Iterator over grid cells in a node that might overlap with `bounds`
-    fn cells_overlapping<const GRID_EXPONENT: u32>(
-        &self,
-        bounds: &TreeBounds<DIM>,
-    ) -> CellsWithin<DIM> {
-        let level = self.level - GRID_EXPONENT;
-        let extent = cell_extent(level);
-        // Expand search by one unit towards the origin to allow for edge-crossing
-        let bounds = bounds.relax(extent);
-        let mut range = self.bounds().intersection(&bounds);
-        // Clamp lower bound to node boundaries
-        range.min = range.min.map(|x| x - x % extent);
-        CellsWithin::new(range, level)
-    }
-
-    fn smallest_common_ancestor(&self, other: &Self) -> Self {
-        let mut a = *self;
-        let mut b = *other;
-        // Ensure `a` is the largest node
-        if a.level < b.level {
-            mem::swap(&mut a, &mut b);
-        }
-        // Find the parent of the smaller node which is on the larger node's level
-        while a.level > b.level {
-            b = b.parent();
-        }
-        // Find the common parent
-        while a.min != b.min {
-            a = a.parent();
-            b = b.parent();
-        }
-        a
-    }
-}
-
-impl<const DIM: usize> fmt::Display for CellCoords<DIM> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let extent = cell_extent(self.level);
-        write!(f, "{}:[", self.level)?;
-        for (i, x) in self.min.iter().enumerate() {
-            if i > 0 {
-                write!(f, ", ")?;
-            }
-            write!(f, "{}", x / extent)?;
-        }
-        write!(f, "]")
-    }
-}
-
-/// Iterator over all nodes at a certain level with a min point inside a [`TreeBounds`]
-#[derive(Debug)]
-struct CellsWithin<const DIM: usize> {
-    range: TreeBounds<DIM>,
-    cursor: [u64; DIM],
-    level: u32,
-}
-
-impl<const DIM: usize> CellsWithin<DIM> {
-    fn new(range: TreeBounds<DIM>, level: u32) -> Self {
-        Self {
-            range,
-            cursor: range.min,
-            level,
-        }
-    }
-}
-
-impl<const DIM: usize> Iterator for CellsWithin<DIM> {
-    type Item = CellCoords<DIM>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.cursor.last().unwrap() > self.range.max.last().unwrap() {
-            return None;
-        }
-        let result = CellCoords {
-            level: self.level,
-            min: self.cursor,
-        };
-        let extent = cell_extent(self.level);
-        self.cursor[0] += extent;
-        for i in 1..DIM {
-            if self.cursor[i - 1] <= self.range.max[i - 1] {
-                break;
-            }
-            self.cursor[i - 1] = self.range.min[i - 1];
-            self.cursor[i] += extent;
-        }
-        Some(result)
-    }
-}
-
-impl<const DIM: usize> Default for CellsWithin<DIM> {
-    /// Construct the empty iterator
-    fn default() -> Self {
-        Self {
-            range: TreeBounds {
-                min: [0; DIM],
-                max: [0; DIM],
-            },
-            cursor: [1; DIM],
-            level: 0,
-        }
-    }
-}
-
-const fn cell_extent(level: u32) -> u64 {
-    (SUBDIV as u64).saturating_pow(level)
-}
-
 /// Compute the index of the node at `level` containing `point` in its parent's child array
 ///
 /// Equivalent to `CellCoords::from_point(point, level).index_in_parent()`
@@ -642,102 +483,6 @@ impl<const DIM: usize> Bounds<DIM> {
     #[cfg(test)]
     const fn point(p: [f64; DIM]) -> Self {
         Self { min: p, max: p }
-    }
-}
-
-/// An axis-aligned bounding box in tree space
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
-struct TreeBounds<const DIM: usize> {
-    /// Smallest point inside the box
-    pub min: [u64; DIM],
-    /// Largest point inside the box
-    pub max: [u64; DIM],
-}
-
-impl<const DIM: usize> TreeBounds<DIM> {
-    /// Number of points inside the rectangle on each axis
-    fn extents(&self) -> [u64; DIM] {
-        array::from_fn(|i| self.max[i] - self.min[i] + 1)
-    }
-
-    /// Find the smallest node a value with these bounds could be stored in, i.e. the largest level
-    /// of nodes with cells smaller than this `Bounds`'s extents on any dimension
-    fn location<const GRID_EXPONENT: u32>(&self) -> CellCoords<DIM> {
-        let Some(extent) = self.extents().into_iter().max() else {
-            // 0-dimensional case
-            return CellCoords {
-                level: 0,
-                min: [0; DIM],
-            };
-        };
-
-        let level = level_for_extent(extent);
-        CellCoords::from_point(self.min, level + GRID_EXPONENT)
-    }
-
-    /// Compute the index of the node at `level` containing this rect in its parent's child array,
-    /// and the index in the selected node's grid, or `None` if the value must be stored at a higher
-    /// level
-    fn index_in<const GRID_EXPONENT: u32>(&self, level: u32) -> Option<usize> {
-        let Some(max_extent) = self.extents().into_iter().max() else {
-            // 0-dimensional case
-            return Some(0);
-        };
-        let extent = cell_extent(level - GRID_EXPONENT);
-        let node_extent = extent * SUBDIV.pow(GRID_EXPONENT) as u64;
-        if max_extent > extent * u64::from(SUBDIV) {
-            return None;
-        }
-        let local_coords = self.min.map(|x| (x / node_extent) % SUBDIV as u64);
-        Some(index_from_local_coords(&local_coords, SUBDIV.into()))
-    }
-
-    pub fn intersects(&self, other: &Self) -> bool {
-        for i in 0..DIM {
-            if self.max[i] < other.min[i] || self.min[i] > other.max[i] {
-                return false;
-            }
-        }
-        true
-    }
-
-    fn intersection(&self, other: &Self) -> Self {
-        Self {
-            min: array::from_fn(|i| self.min[i].max(other.min[i])),
-            max: array::from_fn(|i| self.max[i].min(other.max[i])),
-        }
-    }
-
-    #[cfg(test)]
-    fn contains(&self, point: &[u64; DIM]) -> bool {
-        self.min
-            .iter()
-            .zip(&self.max)
-            .zip(point)
-            .all(|((min, max), x)| min <= x && x <= max)
-    }
-
-    /// Shift the minimum value towards the origin by `range`
-    fn relax(&self, range: u64) -> Self {
-        Self {
-            min: self.min.map(|x| x.saturating_sub(range)),
-            max: self.max,
-        }
-    }
-}
-
-impl<const DIM: usize> Default for TreeBounds<DIM> {
-    fn default() -> Self {
-        Self {
-            min: [0; DIM],
-            max: [0; DIM],
-        }
-    }
-}
-
-impl<const DIM: usize> fmt::Display for TreeBounds<DIM> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?}-{:?}", self.min, self.max)
     }
 }
 
