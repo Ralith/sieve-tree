@@ -179,15 +179,20 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
 
         // See comment on `DepthFirstTraversal::queue`
         let mut stack = ArrayVec::<(u32, &mut [Node<DIM, GRID_EXPONENT>]), MAX_DEPTH>::new();
-        split(root.coords.level, &mut root.node);
+        if root.node.children.is_none() {
+            split(root.coords.level, &mut root.node);
+        }
         if let Some(children) = root.node.children.as_mut() {
             stack.push((root.coords.level, children));
         }
         while let Some((level, children)) = stack.pop() {
             let level = level - 1;
             for child in children.iter_mut() {
-                // Balance elements in `child`
-                split(level, child);
+                // Values eligible for splitting only exist in leaf nodes.
+                if child.children.is_none() {
+                    // Balance elements in `child`
+                    split(level, child);
+                }
 
                 // Queue grandchildren for balancing
                 if let Some(grandchildren) = child.children.as_mut() {
