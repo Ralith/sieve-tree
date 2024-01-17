@@ -12,7 +12,7 @@ pub struct DepthFirstTraversal<'a, const DIM: usize, const GRID_EXPONENT: u32> {
 
 impl<'a, const DIM: usize, const GRID_EXPONENT: u32> DepthFirstTraversal<'a, DIM, GRID_EXPONENT> {
     pub fn push(&mut self, coords: CellCoords<DIM>, node: &'a Node<DIM, GRID_EXPONENT>) {
-        if let Some(ref children) = node.children {
+        if let Some(ref children) = node.state.children() {
             self.queue.push((coords, children));
         }
     }

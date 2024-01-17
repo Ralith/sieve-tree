@@ -143,7 +143,7 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
                 // No further subdivision possible
                 return;
             }
-            if node.unsieved_elements <= elements_per_cell {
+            if node.state.unsieved_elements() <= elements_per_cell {
                 // No cells require balancing
                 return;
             }
@@ -155,7 +155,7 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
                 if cell.unsieved_elements <= elements_per_cell && !any_fresh_split {
                     continue;
                 }
-                let (fresh_split, children) = ensure_children(&mut node.children);
+                let (fresh_split, children) = node.state.ensure_children();
                 any_fresh_split |= fresh_split;
                 let mut next_elt = cell.first_element;
                 let mut prev_elt = None;
@@ -185,33 +185,24 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
                         Some(x) => &mut self.elements[x].next,
                     };
                     *prev_link = next_elt;
-                    if target_level != level {
-                        cell.unsieved_elements -= 1;
-                        node.unsieved_elements -= 1;
-                    }
                 }
             }
         };
 
         // See comment on `DepthFirstTraversal::queue`
         let mut stack = ArrayVec::<(u32, &mut [Node<DIM, GRID_EXPONENT>]), MAX_DEPTH>::new();
-        if root.node.children.is_none() {
-            split(root.coords.level, &mut root.node);
-        }
-        if let Some(children) = root.node.children.as_mut() {
+        split(root.coords.level, &mut root.node);
+        if let Some(children) = root.node.state.children_mut() {
             stack.push((root.coords.level, children));
         }
         while let Some((level, children)) = stack.pop() {
             let level = level - 1;
             for child in children.iter_mut() {
-                // Values eligible for splitting only exist in leaf nodes.
-                if child.children.is_none() {
-                    // Balance elements in `child`
-                    split(level, child);
-                }
+                // Balance elements in `child`
+                split(level, child);
 
                 // Queue grandchildren for balancing
-                if let Some(grandchildren) = child.children.as_mut() {
+                if let Some(grandchildren) = child.state.children_mut() {
                     stack.push((level, grandchildren));
                 }
             }
@@ -302,7 +293,7 @@ fn find_smallest_parent<const DIM: usize, const GRID_EXPONENT: u32>(
     let mut current = &mut root.node;
     let mut current_level = root.coords.level;
     while current_level > old_root_coords.level {
-        let (_, children) = ensure_children(&mut current.children);
+        let (_, children) = current.state.ensure_children();
         current_level -= 1;
         let index = child_index_at_level::<DIM>(old_root_coords.min, current_level);
         current = &mut children[index];
@@ -314,7 +305,7 @@ fn find_smallest_parent<const DIM: usize, const GRID_EXPONENT: u32>(
         let index = child_index_at_level::<DIM>(target.min, root.coords.level - 1);
         (
             root.coords.level - 1,
-            &mut root.node.children.as_mut().unwrap()[index],
+            &mut root.node.state.children_mut().unwrap()[index],
         )
     } else {
         // Ancestor is target
@@ -331,7 +322,7 @@ fn find_smallest_existing_parent<'a, const DIM: usize, const GRID_EXPONENT: u32>
     let mut current = &mut root.node;
     let mut current_level = root.coords.level;
     {
-        while let Some(ref mut children) = current.children {
+        while let Some(children) = current.state.children_mut() {
             if current_level == target.level {
                 break;
             }
@@ -363,7 +354,7 @@ fn link<const DIM: usize, const GRID_EXPONENT: u32, T>(
     elements[element].next = prev;
     if !sieved {
         cell.unsieved_elements += 1;
-        node.unsieved_elements += 1;
+        node.state.add_unsieved();
     }
 }
 
@@ -388,7 +379,7 @@ fn unlink<const DIM: usize, const GRID_EXPONENT: u32, T>(
     }
     if !sieved {
         cell.unsieved_elements -= 1;
-        node.unsieved_elements -= 1;
+        node.state.add_unsieved();
     }
 }
 
@@ -470,38 +461,83 @@ impl<const DIM: usize> Bounds<DIM> {
 
 #[derive(Debug)]
 struct Node<const DIM: usize, const GRID_EXPONENT: u32> {
-    // This should become `Box<[Node<DIM, GRID_EXPONENT>; SUBDIV.pow(DIM)]>` as soon as Rust permits that
-    children: Option<Box<[Node<DIM, GRID_EXPONENT>]>>,
+    state: NodeState<DIM, GRID_EXPONENT>,
     // This should become `[Node<DIM, GRID_EXPONENT>; SUBDIV.pow(GRID_EXPONENT).pow(DIM)]` as soon as Rust permits that
     grid: Box<[Cell]>,
-    // Sum of cell unsieved_elements
-    unsieved_elements: usize,
 }
 
-fn ensure_children<const DIM: usize, const GRID_EXPONENT: u32>(
-    children: &mut Option<Box<[Node<DIM, GRID_EXPONENT>]>>,
-) -> (bool, &mut [Node<DIM, GRID_EXPONENT>]) {
-    match children {
-        Some(x) => (false, x),
-        None => (
-            true,
-            children.insert(
-                (0..SUBDIV.pow(DIM as u32) as usize)
-                    .map(|_| Node::default())
-                    .collect(),
-            ),
-        ),
+#[derive(Debug)]
+enum NodeState<const DIM: usize, const GRID_EXPONENT: u32> {
+    /// Has children, and contains only values too large to be stored at a lower level
+    Internal {
+        // This should become `Box<[Node<DIM, GRID_EXPONENT>; SUBDIV.pow(DIM)]>` as soon as Rust permits that
+        children: Box<[Node<DIM, GRID_EXPONENT>]>,
+    },
+    /// No children
+    Leaf {
+        /// Number of values that could be moved into a child node
+        unsieved_elements: usize,
+    },
+}
+
+impl<const DIM: usize, const GRID_EXPONENT: u32> NodeState<DIM, GRID_EXPONENT> {
+    fn ensure_children(&mut self) -> (bool, &mut [Node<DIM, GRID_EXPONENT>]) {
+        match self {
+            NodeState::Internal { children } => (false, children),
+            NodeState::Leaf { .. } => (true, {
+                *self = NodeState::Internal {
+                    children: (0..SUBDIV.pow(DIM as u32) as usize)
+                        .map(|_| Node::default())
+                        .collect(),
+                };
+                match self {
+                    NodeState::Internal { children } => children,
+                    _ => unreachable!(),
+                }
+            }),
+        }
+    }
+
+    fn unsieved_elements(&self) -> usize {
+        match *self {
+            NodeState::Internal { .. } => 0,
+            NodeState::Leaf { unsieved_elements } => unsieved_elements,
+        }
+    }
+
+    fn add_unsieved(&mut self) {
+        match *self {
+            NodeState::Internal { .. } => unreachable!("adding unsieved element to internal node"),
+            NodeState::Leaf {
+                ref mut unsieved_elements,
+            } => *unsieved_elements += 1,
+        }
+    }
+
+    fn children(&self) -> Option<&[Node<DIM, GRID_EXPONENT>]> {
+        match *self {
+            NodeState::Internal { ref children } => Some(children),
+            NodeState::Leaf { .. } => None,
+        }
+    }
+
+    fn children_mut(&mut self) -> Option<&mut [Node<DIM, GRID_EXPONENT>]> {
+        match *self {
+            NodeState::Internal { ref mut children } => Some(children),
+            NodeState::Leaf { .. } => None,
+        }
     }
 }
 
 impl<const DIM: usize, const GRID_EXPONENT: u32> Default for Node<DIM, GRID_EXPONENT> {
     fn default() -> Self {
         Self {
-            children: None,
+            state: NodeState::Leaf {
+                unsieved_elements: 0,
+            },
             grid: (0..SUBDIV.pow(GRID_EXPONENT).pow(DIM as u32))
                 .map(|_| Cell::default())
                 .collect(),
-            unsieved_elements: 0,
         }
     }
 }
@@ -623,11 +659,11 @@ mod tests {
             for x in -5..5 {
                 let b = Bounds::point([x as f64, y as f64]);
                 t.insert(b, b);
-                validate::<2, 2, Bounds<2>>(&t);
+                validate(&t);
             }
         }
         t.balance(1, |&x| x);
-        validate::<2, 2, Bounds<2>>(&t);
+        validate(&t);
     }
 
     #[test]
@@ -667,7 +703,7 @@ mod tests {
 
     /// Assert that each element is the right cell
     #[track_caller]
-    fn validate<const DIM: usize, const GRID_EXPONENT: u32, T>(
+    fn validate<const DIM: usize, const GRID_EXPONENT: u32>(
         tree: &SieveTree<DIM, GRID_EXPONENT, Bounds<DIM>>,
     ) {
         let mut stack = alloc::vec::Vec::new();
@@ -676,7 +712,7 @@ mod tests {
         }
         let mut total_elements = 0;
         while let Some((coords, node)) = stack.pop() {
-            if let Some(ref children) = node.children {
+            if let Some(children) = node.state.children() {
                 let child_extent = cell_extent(coords.level - 1);
                 for (local, child) in grid::<DIM>(SUBDIV as u64).zip(children.as_ref()) {
                     let child_coords = CellCoords {
@@ -722,7 +758,7 @@ mod tests {
                         max_extent,
                         extent
                     );
-                    if node.children.is_some() {
+                    if node.state.children().is_some() {
                         assert!(
                             max_extent >= extent,
                             "element {} extent {} too small for non-leaf node {} with cell extent {}",
