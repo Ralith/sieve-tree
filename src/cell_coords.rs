@@ -1,4 +1,6 @@
-use core::{fmt, mem};
+#[cfg(test)]
+use core::fmt;
+use core::mem;
 
 use crate::{grid_size, index_from_local_coords, TreeBounds, SUBDIV};
 
@@ -93,6 +95,7 @@ impl<const DIM: usize> CellCoords<DIM> {
     }
 }
 
+#[cfg(test)]
 impl<const DIM: usize> fmt::Display for CellCoords<DIM> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let extent = cell_extent(self.level);

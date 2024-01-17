@@ -1,4 +1,6 @@
-use core::{array, fmt};
+use core::array;
+#[cfg(test)]
+use core::fmt;
 
 use crate::{cell_extent, index_from_local_coords, level_for_extent, CellCoords, SUBDIV};
 
@@ -92,6 +94,7 @@ impl<const DIM: usize> Default for TreeBounds<DIM> {
     }
 }
 
+#[cfg(test)]
 impl<const DIM: usize> fmt::Display for TreeBounds<DIM> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{:?}-{:?}", self.min, self.max)
