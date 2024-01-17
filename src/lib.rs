@@ -48,7 +48,10 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
     /// Insert `value` into the best existing location in the tree, returning an ID that can be used
     /// to access it directly
     pub fn insert(&mut self, bounds: Bounds<DIM>, value: T) -> usize {
-        let id = self.elements.insert(Element { value, next: None });
+        let id = self.elements.insert(Element {
+            value,
+            next: None.into(),
+        });
 
         let (node, cell, sieved) = match &mut self.root {
             None => {
@@ -147,7 +150,7 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
                 any_fresh_split |= fresh_split;
                 let mut next_elt = cell.first_element;
                 let mut prev_elt = None;
-                while let Some(element) = next_elt {
+                while let Some(element) = next_elt.get() {
                     next_elt = self.elements[element].next;
                     let bounds = root
                         .embedding
@@ -364,7 +367,7 @@ fn link<const DIM: usize, const GRID_EXPONENT: u32, T>(
     sieved: bool,
 ) {
     let cell = &mut node.grid[cell];
-    let prev = mem::replace(&mut cell.first_element, Some(element));
+    let prev = mem::replace(&mut cell.first_element, Some(element).into());
     elements[element].next = prev;
     if !sieved {
         cell.unsieved_elements += 1;
@@ -384,7 +387,7 @@ fn unlink<const DIM: usize, const GRID_EXPONENT: u32, T>(
     let cell = &mut node.grid[cell];
     let mut link = &mut cell.first_element;
     loop {
-        let i = link.expect("element missing from node list");
+        let i = link.get().expect("element missing from node list");
         if i == element {
             *link = successor;
             break;
@@ -784,7 +787,9 @@ impl<'a, const DIM: usize, const GRID_EXPONENT: u32, T> Iterator
             // If the current cell has no elements, find a new cell
             if let Some(coords) = self.next_cell.next() {
                 self.next_element = ElementIter::new(
-                    self.grid[coords.index_in_grid::<GRID_EXPONENT>()].first_element,
+                    self.grid[coords.index_in_grid::<GRID_EXPONENT>()]
+                        .first_element
+                        .get(),
                 );
                 continue;
             }
@@ -846,13 +851,13 @@ impl<const DIM: usize, const GRID_EXPONENT: u32> Default for Node<DIM, GRID_EXPO
 struct Cell {
     /// Number of elements associated with this cell which could be split into a smaller node
     unsieved_elements: usize,
-    first_element: Option<usize>,
+    first_element: MaybeIndex,
 }
 
 #[derive(Debug)]
 struct Element<T> {
     value: T,
-    next: Option<usize>,
+    next: MaybeIndex,
 }
 
 /// Index of coordinates in a cuboidal `grid_size.pow(DIM)` grid
@@ -888,8 +893,36 @@ impl ElementIter {
 
     fn next<T>(&mut self, elements: &Slab<Element<T>>) -> Option<usize> {
         let i = self.next?;
-        self.next = elements[i].next;
+        self.next = elements[i].next.get();
         Some(i)
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+struct MaybeIndex(usize);
+
+impl MaybeIndex {
+    fn new(i: Option<usize>) -> Self {
+        Self(i.unwrap_or(usize::MAX))
+    }
+
+    fn get(self) -> Option<usize> {
+        match self.0 == usize::MAX {
+            true => None,
+            false => Some(self.0),
+        }
+    }
+}
+
+impl From<Option<usize>> for MaybeIndex {
+    fn from(x: Option<usize>) -> Self {
+        Self::new(x)
+    }
+}
+
+impl Default for MaybeIndex {
+    fn default() -> Self {
+        Self::new(None)
     }
 }
 
@@ -1021,7 +1054,7 @@ mod tests {
                     level: coords.level - GRID_EXPONENT,
                 };
                 let cell_bounds = cell_coords.bounds();
-                let mut iter = ElementIter::new(cell.first_element);
+                let mut iter = ElementIter::new(cell.first_element.get());
                 while let Some(elt) = iter.next(&tree.elements) {
                     total_elements += 1;
                     let elt_bounds = tree
