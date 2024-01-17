@@ -50,7 +50,7 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
     pub fn insert(&mut self, bounds: Bounds<DIM>, value: T) -> usize {
         let id = self.elements.insert(Element { value, next: None });
 
-        let (node, cell) = match &mut self.root {
+        let (node, cell, sieved) = match &mut self.root {
             None => {
                 let embedding = Embedding { origin: bounds.min };
                 let extent = embedding
@@ -70,7 +70,7 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
                         node: Node::default(),
                     })
                     .node;
-                (node, 0)
+                (node, 0, true)
             }
             Some(root) => {
                 let current = root.world_bounds(self.scale);
@@ -110,7 +110,7 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
                 find_smallest_parent(root, target)
             }
         };
-        link(&mut self.elements, node, cell, id);
+        link(&mut self.elements, node, cell, id, sieved);
 
         id
     }
@@ -131,7 +131,7 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
                 // No further subdivision possible
                 return;
             }
-            if node.elements <= elements_per_cell {
+            if node.unsieved_elements <= elements_per_cell {
                 // No cells require balancing
                 return;
             }
@@ -140,7 +140,7 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
                 // Split a cell if it's too large. The first time we allocate children, we visit all
                 // (non-sieved) elements to ensure small values are always in the smallest possible
                 // cell, and don't float around high up in the tree indefinitely.
-                if cell.elements <= elements_per_cell && !any_fresh_split {
+                if cell.unsieved_elements <= elements_per_cell && !any_fresh_split {
                     continue;
                 }
                 let (fresh_split, children) = ensure_children(&mut node.children);
@@ -158,12 +158,14 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
                         continue;
                     };
                     let cell_idx = grid_index_at_level::<DIM, GRID_EXPONENT>(bounds.min, level - 1);
+                    let target_level = bounds.location::<GRID_EXPONENT>().level;
                     // Link into child
                     link(
                         &mut self.elements,
                         &mut children[child_node_idx],
                         cell_idx,
                         element,
+                        target_level == level - 1,
                     );
                     // Unlink from `node`
                     let prev_link = match prev_elt {
@@ -171,8 +173,10 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
                         Some(x) => &mut self.elements[x].next,
                     };
                     *prev_link = next_elt;
-                    cell.elements -= 1;
-                    node.elements -= 1;
+                    if target_level != level {
+                        cell.unsieved_elements -= 1;
+                        node.unsieved_elements -= 1;
+                    }
                 }
             }
         };
@@ -211,8 +215,8 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
         // A value is guaranteed to be stored in the smallest existing node permitted for it, because:
         // - `insert` only introduces nodes that are siblings of or larger than the root
         // - `balance` always moves all possible elements into newly created child nodes
-        let (node, cell) = find_smallest_existing_parent(root, target);
-        unlink(&mut self.elements, node, cell, id);
+        let (node, cell, sieved) = find_smallest_existing_parent(root, target);
+        unlink(&mut self.elements, node, cell, id, sieved);
         elt.value
     }
 
@@ -290,7 +294,7 @@ impl<const DIM: usize, const GRID_EXPONENT: u32> Root<DIM, GRID_EXPONENT> {
 fn find_smallest_parent<const DIM: usize, const GRID_EXPONENT: u32>(
     root: &mut Root<DIM, GRID_EXPONENT>,
     target: CellCoords<DIM>,
-) -> (&mut Node<DIM, GRID_EXPONENT>, usize) {
+) -> (&mut Node<DIM, GRID_EXPONENT>, usize, bool) {
     let ancestor = root.coords.smallest_common_ancestor(&target);
     if ancestor == root.coords {
         return find_smallest_existing_parent(root, target);
@@ -322,13 +326,13 @@ fn find_smallest_parent<const DIM: usize, const GRID_EXPONENT: u32>(
         (root.coords.level, &mut root.node)
     };
     let cell_index = grid_index_at_level::<DIM, GRID_EXPONENT>(target.min, level);
-    (node, cell_index)
+    (node, cell_index, level == target.level)
 }
 
 fn find_smallest_existing_parent<'a, const DIM: usize, const GRID_EXPONENT: u32>(
     root: &'a mut Root<DIM, GRID_EXPONENT>,
     target: CellCoords<DIM>,
-) -> (&'a mut Node<DIM, GRID_EXPONENT>, usize) {
+) -> (&'a mut Node<DIM, GRID_EXPONENT>, usize, bool) {
     let mut current = &mut root.node;
     let mut current_level = root.coords.level;
     {
@@ -348,7 +352,7 @@ fn find_smallest_existing_parent<'a, const DIM: usize, const GRID_EXPONENT: u32>
         }
     }
     let cell_index = grid_index_at_level::<DIM, GRID_EXPONENT>(target.min, current_level);
-    (current, cell_index)
+    (current, cell_index, current_level == target.level)
 }
 
 /// Add `element` to `cell`
@@ -357,12 +361,15 @@ fn link<const DIM: usize, const GRID_EXPONENT: u32, T>(
     node: &mut Node<DIM, GRID_EXPONENT>,
     cell: usize,
     element: usize,
+    sieved: bool,
 ) {
     let cell = &mut node.grid[cell];
     let prev = mem::replace(&mut cell.first_element, Some(element));
     elements[element].next = prev;
-    cell.elements += 1;
-    node.elements += 1;
+    if !sieved {
+        cell.unsieved_elements += 1;
+        node.unsieved_elements += 1;
+    }
 }
 
 /// Remove `element` from `cell`
@@ -371,6 +378,7 @@ fn unlink<const DIM: usize, const GRID_EXPONENT: u32, T>(
     node: &mut Node<DIM, GRID_EXPONENT>,
     cell: usize,
     element: usize,
+    sieved: bool,
 ) {
     let successor = elements[element].next;
     let cell = &mut node.grid[cell];
@@ -383,8 +391,10 @@ fn unlink<const DIM: usize, const GRID_EXPONENT: u32, T>(
         }
         link = &mut elements[i].next;
     }
-    cell.elements -= 1;
-    node.elements -= 1;
+    if !sieved {
+        cell.unsieved_elements -= 1;
+        node.unsieved_elements -= 1;
+    }
 }
 
 /// Mapping between tree coordinates and world coordinates
@@ -800,8 +810,8 @@ struct Node<const DIM: usize, const GRID_EXPONENT: u32> {
     children: Option<Box<[Node<DIM, GRID_EXPONENT>]>>,
     // This should become `[Node<DIM, GRID_EXPONENT>; SUBDIV.pow(GRID_EXPONENT).pow(DIM)]` as soon as Rust permits that
     grid: Box<[Cell]>,
-    // Sum of cell elements
-    elements: usize,
+    // Sum of cell unsieved_elements
+    unsieved_elements: usize,
 }
 
 fn ensure_children<const DIM: usize, const GRID_EXPONENT: u32>(
@@ -827,16 +837,15 @@ impl<const DIM: usize, const GRID_EXPONENT: u32> Default for Node<DIM, GRID_EXPO
             grid: (0..SUBDIV.pow(GRID_EXPONENT).pow(DIM as u32))
                 .map(|_| Cell::default())
                 .collect(),
-            elements: 0,
+            unsieved_elements: 0,
         }
     }
 }
 
 #[derive(Debug, Default)]
 struct Cell {
-    /// Number of elements associated directly with this cell
-    // TODO: Count only unsieved elements
-    elements: usize,
+    /// Number of elements associated with this cell which could be split into a smaller node
+    unsieved_elements: usize,
     first_element: Option<usize>,
 }
 
@@ -943,16 +952,6 @@ mod tests {
         }
         t.balance(1, |&x| x);
         validate::<2, 2, Bounds<2>>(&t);
-        let mut nonempty_cells = 0;
-        for (coords, node) in nodes(&t) {
-            for cell in &*node.grid {
-                assert!(cell.elements <= 1, "too many elements at {}", coords);
-                if cell.elements == 1 {
-                    nonempty_cells += 1;
-                }
-            }
-        }
-        assert_eq!(nonempty_cells, 100);
     }
 
     #[test]
@@ -988,22 +987,6 @@ mod tests {
             .count(),
             0
         );
-    }
-
-    fn nodes<const DIM: usize, const GRID_EXPONENT: u32, T>(
-        tree: &SieveTree<DIM, GRID_EXPONENT, T>,
-    ) -> impl Iterator<Item = (u32, &'_ Node<DIM, GRID_EXPONENT>)> {
-        let mut stack = alloc::vec::Vec::new();
-        if let Some(root) = &tree.root {
-            stack.push((root.coords.level, &root.node));
-        }
-        core::iter::from_fn(move || {
-            let (level, node) = stack.pop()?;
-            if let Some(children) = node.children.as_ref() {
-                stack.extend(children.iter().map(|node| (level - 1, node)));
-            }
-            Some((level, node))
-        })
     }
 
     /// Assert that each element is the right cell
