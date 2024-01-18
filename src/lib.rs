@@ -21,7 +21,7 @@ use traversal::Intersections;
 ///
 /// Each tree node owns a grid of `2.pow(GRID_EXPONENT).pow(DIM)` cells. Increasing `GRID_EXPONENT`
 /// makes the tree less sparse, which accelerates random access by reducing indirection in exchange
-/// for exponentially increased memory requirements and balance work.
+/// for exponentially increased memory requirements and less precise balancing.
 #[derive(Debug)]
 pub struct SieveTree<const DIM: usize, const GRID_EXPONENT: u32, T> {
     /// Length of a level 0 node edge in world space
