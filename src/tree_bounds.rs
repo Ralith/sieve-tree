@@ -19,19 +19,21 @@ impl<const DIM: usize> TreeBounds<DIM> {
         array::from_fn(|i| self.max[i] - self.min[i] + 1)
     }
 
+    /// The level component of [`location()`](Self::location)
+    pub fn level<const GRID_EXPONENT: u32>(&self) -> u32 {
+        let Some(extent) = self.extents().into_iter().max() else {
+            // 0-dimensional case
+            return 0;
+        };
+
+        level_for_extent(extent) + GRID_EXPONENT
+    }
+
     /// Find the smallest node a value with these bounds could be stored in, i.e. the largest level
     /// of nodes with cells smaller than this `Bounds`'s extents on any dimension
     pub fn location<const GRID_EXPONENT: u32>(&self) -> CellCoords<DIM> {
-        let Some(extent) = self.extents().into_iter().max() else {
-            // 0-dimensional case
-            return CellCoords {
-                level: 0,
-                min: [0; DIM],
-            };
-        };
-
-        let level = level_for_extent(extent);
-        CellCoords::from_point(self.min, level + GRID_EXPONENT)
+        let level = self.level::<GRID_EXPONENT>();
+        CellCoords::from_point(self.min, level)
     }
 
     /// Compute the index of the node at `level` containing this rect in its parent's child array,

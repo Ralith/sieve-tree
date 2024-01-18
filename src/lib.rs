@@ -170,7 +170,7 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
                         continue;
                     };
                     let cell_idx = grid_index_at_level::<DIM, GRID_EXPONENT>(bounds.min, level - 1);
-                    let target_level = bounds.location::<GRID_EXPONENT>().level;
+                    let target_level = bounds.level::<GRID_EXPONENT>();
                     // Link into child
                     link(
                         &mut self.elements,
