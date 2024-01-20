@@ -370,7 +370,7 @@ fn unlink<const DIM: usize, const GRID_EXPONENT: u32, T>(
         link = &mut elements[i].next;
     }
     if !sieved {
-        node.state.add_unsieved();
+        node.state.remove_unsieved();
     }
 }
 
@@ -502,6 +502,17 @@ impl<const DIM: usize, const GRID_EXPONENT: u32> NodeState<DIM, GRID_EXPONENT> {
             NodeState::Leaf {
                 ref mut unsieved_elements,
             } => *unsieved_elements += 1,
+        }
+    }
+
+    fn remove_unsieved(&mut self) {
+        match *self {
+            NodeState::Internal { .. } => {
+                unreachable!("removing unsieved element from internal node")
+            }
+            NodeState::Leaf {
+                ref mut unsieved_elements,
+            } => *unsieved_elements -= 1,
         }
     }
 
