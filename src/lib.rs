@@ -85,36 +85,7 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
                 (node, 0, true)
             }
             Some(root) => {
-                let current = root.world_bounds(self.granularity);
-                if bounds.min.iter().zip(&current.min).any(|(x, y)| x < y) {
-                    // `bounds` falls below the area currently covered by the tree. Shift the origin
-                    // by a multiple of the root node size to encompass it, and shift the root node
-                    // in the opposite direction so we don't have to reindex.
-
-                    let root_extent = cell_extent(root.coords.level);
-                    let world_root_extent = self.granularity * root_extent as f64;
-                    let offset: [u64; DIM] = array::from_fn(|i| {
-                        let min = current.min[i].min(bounds.min[i]);
-                        // Nonnegative
-                        let distance = root.embedding.origin[i] - min;
-                        // How far we need to shift the origin in this dimension, in multiples of extent
-                        let offset = distance / world_root_extent;
-                        // `offset.ceil() as u64` would be a little cleaner, but isn't in core.
-                        if offset == 0.0 {
-                            0
-                        } else {
-                            offset as u64 + 1
-                        }
-                    });
-                    // Move the origin downwards to encompass the new minimum bound...
-                    root.embedding.origin = array::from_fn(|i| {
-                        root.embedding.origin[i] - offset[i] as f64 * world_root_extent
-                    });
-                    // ...and move the root node upwards to compensate.
-                    root.coords.min =
-                        array::from_fn(|i| root.coords.min[i] + offset[i] * root_extent);
-                }
-
+                root.ensure_contains(self.granularity, &bounds);
                 let target = root
                     .embedding
                     .bounds_from_world(self.granularity, &bounds)
@@ -269,6 +240,36 @@ impl<const DIM: usize, const GRID_EXPONENT: u32> Root<DIM, GRID_EXPONENT> {
     fn world_bounds(&self, granularity: f64) -> Bounds<DIM> {
         self.embedding
             .world_bounds_from_tree(granularity, &self.coords.bounds())
+    }
+
+    fn ensure_contains(&mut self, granularity: f64, bounds: &Bounds<DIM>) {
+        let current = self.world_bounds(granularity);
+        if bounds.min.iter().zip(&current.min).any(|(x, y)| x < y) {
+            // `bounds` falls below the area currently covered by the tree. Shift the origin
+            // by a multiple of the root node size to encompass it, and shift the root node
+            // in the opposite direction so we don't have to reindex.
+
+            let root_extent = cell_extent(self.coords.level);
+            let world_root_extent = granularity * root_extent as f64;
+            let offset: [u64; DIM] = array::from_fn(|i| {
+                let min = current.min[i].min(bounds.min[i]);
+                // Nonnegative
+                let distance = self.embedding.origin[i] - min;
+                // How far we need to shift the origin in this dimension, in multiples of extent
+                let offset = distance / world_root_extent;
+                // `offset.ceil() as u64` would be a little cleaner, but isn't in core.
+                if offset == 0.0 {
+                    0
+                } else {
+                    offset as u64 + 1
+                }
+            });
+            // Move the origin downwards to encompass the new minimum bound...
+            self.embedding.origin =
+                array::from_fn(|i| self.embedding.origin[i] - offset[i] as f64 * world_root_extent);
+            // ...and move the root node upwards to compensate.
+            self.coords.min = array::from_fn(|i| self.coords.min[i] + offset[i] * root_extent);
+        }
     }
 }
 
