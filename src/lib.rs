@@ -25,7 +25,7 @@ use traversal::Intersections;
 #[derive(Debug)]
 pub struct SieveTree<const DIM: usize, const GRID_EXPONENT: u32, T> {
     /// Length of a level 0 node edge in world space
-    scale: f64,
+    granularity: f64,
     root: Option<Root<DIM, GRID_EXPONENT>>,
     elements: Slab<Element<T>>,
 }
@@ -47,9 +47,9 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
     ///
     /// The default is 0.01. If world space is measured in meters, this allows partitioning of
     /// objects at centimeter resolution while remaining able to index the entire solar system.
-    pub fn with_scale(scale: f64) -> Self {
+    pub fn with_granularity(granularity: f64) -> Self {
         Self {
-            scale,
+            granularity,
             ..Self::default()
         }
     }
@@ -66,7 +66,7 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
             None => {
                 let embedding = Embedding { origin: bounds.min };
                 let extent = embedding
-                    .bounds_from_world(self.scale, &bounds)
+                    .bounds_from_world(self.granularity, &bounds)
                     .extents()
                     .into_iter()
                     .max();
@@ -85,14 +85,14 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
                 (node, 0, true)
             }
             Some(root) => {
-                let current = root.world_bounds(self.scale);
+                let current = root.world_bounds(self.granularity);
                 if bounds.min.iter().zip(&current.min).any(|(x, y)| x < y) {
                     // `bounds` falls below the area currently covered by the tree. Shift the origin
                     // by a multiple of the root node size to encompass it, and shift the root node
                     // in the opposite direction so we don't have to reindex.
 
                     let root_extent = cell_extent(root.coords.level);
-                    let world_root_extent = self.scale * root_extent as f64;
+                    let world_root_extent = self.granularity * root_extent as f64;
                     let offset: [u64; DIM] = array::from_fn(|i| {
                         let min = current.min[i].min(bounds.min[i]);
                         // Nonnegative
@@ -117,7 +117,7 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
 
                 let target = root
                     .embedding
-                    .bounds_from_world(self.scale, &bounds)
+                    .bounds_from_world(self.granularity, &bounds)
                     .location::<GRID_EXPONENT>();
                 find_smallest_parent(root, target)
             }
@@ -154,9 +154,10 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
                 let mut prev_elt = None;
                 while let Some(element) = next_elt.get() {
                     next_elt = self.elements[element].next;
-                    let bounds = root
-                        .embedding
-                        .bounds_from_world(self.scale, &get_bounds(&self.elements[element].value));
+                    let bounds = root.embedding.bounds_from_world(
+                        self.granularity,
+                        &get_bounds(&self.elements[element].value),
+                    );
                     let Some(child_node_idx) = bounds.index_in::<GRID_EXPONENT>(level - 1) else {
                         // Too large to move into children
                         prev_elt = Some(element);
@@ -206,7 +207,7 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
     pub fn remove(&mut self, bounds: Bounds<DIM>, id: usize) -> T {
         let elt = self.elements.remove(id);
         let root = self.root.as_mut().unwrap();
-        let bounds = root.embedding.bounds_from_world(self.scale, &bounds);
+        let bounds = root.embedding.bounds_from_world(self.granularity, &bounds);
         let target = bounds.location::<GRID_EXPONENT>();
         // A value is guaranteed to be stored in the smallest existing node permitted for it, because:
         // - `insert` only introduces nodes that are siblings of or larger than the root
@@ -217,7 +218,9 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
     }
 
     pub fn bounds(&self) -> Option<Bounds<DIM>> {
-        self.root.as_ref().map(|root| root.world_bounds(self.scale))
+        self.root
+            .as_ref()
+            .map(|root| root.world_bounds(self.granularity))
     }
 
     /// Borrow the value associated with `id`
@@ -235,7 +238,7 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
         let bounds = self
             .root
             .as_ref()
-            .map(|x| x.embedding.bounds_from_world(self.scale, &bounds))
+            .map(|x| x.embedding.bounds_from_world(self.granularity, &bounds))
             .unwrap_or(TreeBounds {
                 min: [0; DIM],
                 max: [0; DIM],
@@ -248,7 +251,7 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> Default for SieveTree<DIM, G
     fn default() -> Self {
         Self {
             // 1cm if world space is in meters. Big enough for the solar system.
-            scale: 0.01,
+            granularity: 0.01,
             root: None,
             elements: Slab::default(),
         }
@@ -263,9 +266,9 @@ struct Root<const DIM: usize, const GRID_EXPONENT: u32> {
 }
 
 impl<const DIM: usize, const GRID_EXPONENT: u32> Root<DIM, GRID_EXPONENT> {
-    fn world_bounds(&self, scale: f64) -> Bounds<DIM> {
+    fn world_bounds(&self, granularity: f64) -> Bounds<DIM> {
         self.embedding
-            .world_bounds_from_tree(scale, &self.coords.bounds())
+            .world_bounds_from_tree(granularity, &self.coords.bounds())
     }
 }
 
@@ -383,27 +386,27 @@ struct Embedding<const DIM: usize> {
 
 impl<const DIM: usize> Embedding<DIM> {
     /// Compute the location of the level-0 node that contains `world`
-    fn tree_from_world(&self, scale: f64, world: &[f64; DIM]) -> [u64; DIM] {
-        array::from_fn(|i| ((world[i] - self.origin[i]) / scale) as u64)
+    fn tree_from_world(&self, granularity: f64, world: &[f64; DIM]) -> [u64; DIM] {
+        array::from_fn(|i| ((world[i] - self.origin[i]) / granularity) as u64)
     }
 
     /// Compute the tree bounds that contain `world`
-    fn bounds_from_world(&self, scale: f64, world: &Bounds<DIM>) -> TreeBounds<DIM> {
+    fn bounds_from_world(&self, granularity: f64, world: &Bounds<DIM>) -> TreeBounds<DIM> {
         TreeBounds {
-            min: self.tree_from_world(scale, &world.min),
-            max: self.tree_from_world(scale, &world.max),
+            min: self.tree_from_world(granularity, &world.min),
+            max: self.tree_from_world(granularity, &world.max),
         }
     }
 
     /// Compute the lower bound of the world coordinates of the level-0 node at `tree`
-    fn world_from_tree(&self, scale: f64, tree: &[u64; DIM]) -> [f64; DIM] {
-        array::from_fn(|i| tree[i] as f64 * scale + self.origin[i])
+    fn world_from_tree(&self, granularity: f64, tree: &[u64; DIM]) -> [f64; DIM] {
+        array::from_fn(|i| tree[i] as f64 * granularity + self.origin[i])
     }
 
-    fn world_bounds_from_tree(&self, scale: f64, tree: &TreeBounds<DIM>) -> Bounds<DIM> {
+    fn world_bounds_from_tree(&self, granularity: f64, tree: &TreeBounds<DIM>) -> Bounds<DIM> {
         Bounds {
-            min: self.world_from_tree(scale, &tree.min),
-            max: self.world_from_tree(scale, &tree.max.map(|x| x + 1)),
+            min: self.world_from_tree(granularity, &tree.min),
+            max: self.world_from_tree(granularity, &tree.max.map(|x| x + 1)),
         }
     }
 }
@@ -741,7 +744,7 @@ mod tests {
                         .as_ref()
                         .unwrap()
                         .embedding
-                        .bounds_from_world(tree.scale, &tree.elements[elt].value);
+                        .bounds_from_world(tree.granularity, &tree.elements[elt].value);
                     assert!(
                         cell_bounds.contains(&elt_bounds.min),
                         "element {} origin {:?} outside of cell {} with bounds {}",
