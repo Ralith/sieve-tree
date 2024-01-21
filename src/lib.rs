@@ -100,6 +100,48 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
         id
     }
 
+    /// Update the bounds of the value associated with `id`
+    ///
+    /// Similar to `remove` followed by `insert`, but preserves identity and does less work for
+    /// small changes.
+    pub fn update(&mut self, id: usize, old: Bounds<DIM>, new: Bounds<DIM>) {
+        let Some(root) = &mut self.root else {
+            panic!("tried to update an element in an empty tree");
+        };
+        root.ensure_contains(self.granularity, &new);
+        let old = root.embedding.bounds_from_world(self.granularity, &old);
+        let old_coords = old.location::<GRID_EXPONENT>();
+        let new = root.embedding.bounds_from_world(self.granularity, &new);
+        let new_coords = new.location::<GRID_EXPONENT>();
+        let ancestor = old_coords.smallest_common_ancestor(&new_coords);
+        let (node, level) = find_smallest_parent(root, ancestor);
+
+        // Remove from old location
+        {
+            let (node, level) = find_smallest_existing_parent(level, node, old_coords);
+            let cell = grid_index_at_level::<DIM, GRID_EXPONENT>(old.min, level);
+            unlink(
+                &mut self.elements,
+                node,
+                cell,
+                id,
+                level == old_coords.level,
+            );
+        }
+
+        // Insert into new location. Because `ancestor` was created if necessary, we know that a
+        // suitable node already exists.
+        let (node, level) = find_smallest_existing_parent(level, node, new_coords);
+        let cell = grid_index_at_level::<DIM, GRID_EXPONENT>(new.min, level);
+        link(
+            &mut self.elements,
+            node,
+            cell,
+            id,
+            new_coords.level == level,
+        )
+    }
+
     /// Recursively split cells with more than `elements_per_cell` elements
     ///
     /// Call after large numbers of `insert`s to maintain consistent search performance.
