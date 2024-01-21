@@ -183,7 +183,8 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
         // A value is guaranteed to be stored in the smallest existing node permitted for it, because:
         // - `insert` only introduces nodes that are siblings of or larger than the root
         // - `balance` always moves all possible elements into newly created child nodes
-        let (node, cell, sieved) = find_smallest_existing_parent(root, target);
+        let (node, cell, sieved) =
+            find_smallest_existing_parent(root.coords.level, &mut root.node, target);
         unlink(&mut self.elements, node, cell, id, sieved);
         elt.value
     }
@@ -280,7 +281,7 @@ fn find_smallest_parent<const DIM: usize, const GRID_EXPONENT: u32>(
 ) -> (&mut Node<DIM, GRID_EXPONENT>, usize, bool) {
     let ancestor = root.coords.smallest_common_ancestor(&target);
     if ancestor == root.coords {
-        return find_smallest_existing_parent(root, target);
+        return find_smallest_existing_parent(root.coords.level, &mut root.node, target);
     }
     // Create new root that encloses both old root and target
     let old_root = mem::take(&mut root.node);
@@ -313,11 +314,12 @@ fn find_smallest_parent<const DIM: usize, const GRID_EXPONENT: u32>(
 }
 
 fn find_smallest_existing_parent<'a, const DIM: usize, const GRID_EXPONENT: u32>(
-    root: &'a mut Root<DIM, GRID_EXPONENT>,
+    start_level: u32,
+    start_node: &'a mut Node<DIM, GRID_EXPONENT>,
     target: CellCoords<DIM>,
 ) -> (&'a mut Node<DIM, GRID_EXPONENT>, usize, bool) {
-    let mut current = &mut root.node;
-    let mut current_level = root.coords.level;
+    let mut current = start_node;
+    let mut current_level = start_level;
     {
         while let Some(children) = current.state.children_mut() {
             if current_level == target.level {
