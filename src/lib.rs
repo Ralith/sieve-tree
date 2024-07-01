@@ -220,7 +220,6 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
 
     /// Remove the value associated with `id`
     pub fn remove(&mut self, id: usize, bounds: Bounds<DIM>) -> T {
-        let elt = self.elements.remove(id);
         let root = self.root.as_mut().unwrap();
         let bounds = root.embedding.bounds_from_world(self.granularity, &bounds);
         let target = bounds.location::<GRID_EXPONENT>();
@@ -231,6 +230,7 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
             find_smallest_existing_parent(root.coords.level, &mut root.node, target);
         let cell = grid_index_at_level::<DIM, GRID_EXPONENT>(target.min, level);
         unlink(&mut self.elements, node, cell, id, level == target.level);
+        let elt = self.elements.remove(id);
         elt.value
     }
 
@@ -846,5 +846,13 @@ mod tests {
             }
             Some(result)
         })
+    }
+
+    #[test]
+    fn trivial_remove() {
+        let mut tree = SieveTree::<1, 2, Bounds<1>>::new();
+        let bounds = Bounds::point([0.]);
+        let id = tree.insert(bounds, bounds);
+        assert_eq!(tree.remove(id, bounds), bounds);
     }
 }
