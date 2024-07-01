@@ -219,7 +219,7 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
     }
 
     /// Remove the value associated with `id`
-    pub fn remove(&mut self, bounds: Bounds<DIM>, id: usize) -> T {
+    pub fn remove(&mut self, id: usize, bounds: Bounds<DIM>) -> T {
         let elt = self.elements.remove(id);
         let root = self.root.as_mut().unwrap();
         let bounds = root.embedding.bounds_from_world(self.granularity, &bounds);
