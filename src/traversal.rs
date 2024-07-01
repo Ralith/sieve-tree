@@ -89,6 +89,7 @@ impl<'a, const DIM: usize, const GRID_EXPONENT: u32, T> Iterator
                 self.traversal.push(coords, child);
                 self.grid = &child.grid;
                 self.next_cell = coords.cells_overlapping::<GRID_EXPONENT>(&self.bounds);
+                continue;
             }
             // If we're out of child nodes, get the next group from the queue
             let (coords, children) = self.traversal.pop()?;
