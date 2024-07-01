@@ -3,7 +3,7 @@
 extern crate alloc;
 
 use alloc::boxed::Box;
-use core::{array, mem};
+use core::{array, fmt, mem};
 
 use arrayvec::ArrayVec;
 use slab::Slab;
@@ -625,7 +625,7 @@ const fn grid_size<const GRID_EXPONENT: u32>() -> usize {
     SUBDIV.pow(GRID_EXPONENT) as usize
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Copy, Clone)]
 struct MaybeIndex(usize);
 
 impl MaybeIndex {
@@ -650,6 +650,15 @@ impl From<Option<usize>> for MaybeIndex {
 impl Default for MaybeIndex {
     fn default() -> Self {
         Self::new(None)
+    }
+}
+
+impl fmt::Debug for MaybeIndex {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 == usize::MAX {
+            false => f.debug_tuple("Some").field(&self.0).finish(),
+            true => f.debug_tuple("None").finish(),
+        }
     }
 }
 
