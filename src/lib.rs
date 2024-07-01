@@ -499,11 +499,46 @@ impl<const DIM: usize> Bounds<DIM> {
     }
 }
 
-#[derive(Debug)]
 struct Node<const DIM: usize, const GRID_EXPONENT: u32> {
     state: NodeState<DIM, GRID_EXPONENT>,
     // This should become `[Node<DIM, GRID_EXPONENT>; SUBDIV.pow(GRID_EXPONENT).pow(DIM)]` as soon as Rust permits that
     grid: Box<[Cell]>,
+}
+
+impl<const DIM: usize, const GRID_EXPONENT: u32> fmt::Debug for Node<DIM, GRID_EXPONENT> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Node")
+            .field("state", &self.state)
+            .field("elements", &GridElements::<DIM, GRID_EXPONENT>(&*self.grid))
+            .finish()
+    }
+}
+
+struct GridElements<'a, const DIM: usize, const GRID_EXPONENT: u32>(&'a [Cell]);
+
+impl<'a, const DIM: usize, const GRID_EXPONENT: u32> fmt::Debug
+    for GridElements<'a, DIM, GRID_EXPONENT>
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_map()
+            .entries(self.0.iter().enumerate().filter_map(|(idx, cell)| {
+                Some((
+                    index_coords::<DIM, GRID_EXPONENT>(idx),
+                    cell.first_element.get()?,
+                ))
+            }))
+            .finish()
+    }
+}
+
+/// Compute the coordinates of an index in a dense `DIM`-dimensional grid with edges of length
+/// `SUBDIV.pow(GRID_EXPONENT)`
+fn index_coords<const DIM: usize, const GRID_EXPONENT: u32>(index: usize) -> [u64; DIM] {
+    let range = (SUBDIV as u64).pow(GRID_EXPONENT);
+    array::from_fn(|i| {
+        let unit = range.pow(i as u32);
+        (index as u64 / unit) % range
+    })
 }
 
 #[derive(Debug)]
@@ -664,6 +699,7 @@ impl fmt::Debug for MaybeIndex {
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
     use super::*;
     use traversal::ElementIter;
 
@@ -863,5 +899,41 @@ mod tests {
         let bounds = Bounds::point([0.]);
         let id = tree.insert(bounds, bounds);
         assert_eq!(tree.remove(id, bounds), bounds);
+    }
+
+    #[test]
+    fn index_coords_sanity() {
+        // Indices in a 2x2x2 cube
+        assert_eq!(index_coords::<3, 1>(0), [0, 0, 0]);
+        assert_eq!(index_coords::<3, 1>(1), [1, 0, 0]);
+        assert_eq!(index_coords::<3, 1>(2), [0, 1, 0]);
+        assert_eq!(index_coords::<3, 1>(3), [1, 1, 0]);
+        assert_eq!(index_coords::<3, 1>(4), [0, 0, 1]);
+        assert_eq!(index_coords::<3, 1>(5), [1, 0, 1]);
+        assert_eq!(index_coords::<3, 1>(6), [0, 1, 1]);
+        assert_eq!(index_coords::<3, 1>(7), [1, 1, 1]);
+    }
+
+    #[test]
+    fn regression1() {
+        let mut t = SieveTree::<2, 2, Bounds<2>>::new();
+        let b1 = Bounds {
+            min: [30., 30.],
+            max: [31., 31.],
+        };
+        let b2 = Bounds {
+            min: [50., 50.],
+            max: [51., 51.],
+        };
+        t.insert(b1, b1);
+        t.insert(b2, b2);
+        assert_eq!(
+            t.intersections(Bounds {
+                min: [0.0, 0.0],
+                max: [100., 100.]
+            })
+            .count(),
+            2
+        );
     }
 }
