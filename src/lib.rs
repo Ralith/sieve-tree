@@ -817,16 +817,11 @@ mod tests {
                 }
             }
 
-            for (local, cell) in
-                grid::<DIM>(grid_size::<GRID_EXPONENT>() as u64).zip(node.grid.as_ref())
+            for cell in node.grid.as_ref()
             {
                 let extent = cell_extent(coords.level - GRID_EXPONENT);
                 let parent_extent = extent * SUBDIV as u64;
-                let cell_coords = CellCoords::<DIM> {
-                    min: array::from_fn(|i| coords.min[i] + local[i] * extent),
-                    level: coords.level - GRID_EXPONENT,
-                };
-                let cell_bounds = cell_coords.bounds();
+                let cell_bounds = coords.bounds();
                 let mut iter = ElementIter::new(cell.first_element.get());
                 while let Some(elt) = iter.next(&tree.elements) {
                     total_elements += 1;
@@ -841,7 +836,7 @@ mod tests {
                         "element {} origin {:?} outside of cell {} with bounds {}",
                         elt,
                         elt_bounds.min,
-                        cell_coords,
+                        coords,
                         cell_bounds
                     );
                     let max_extent = elt_bounds.extents().into_iter().max().unwrap_or(0);
@@ -935,5 +930,21 @@ mod tests {
             .count(),
             2
         );
+    }
+
+    #[test]
+    fn regression2() {
+        let mut t = SieveTree::<1, 2, Bounds<1>>::new();
+        let a = Bounds {
+            min: [5.],
+            max: [10.],
+        };
+        let b = Bounds {
+            min: [20.],
+            max: [25.],
+        };
+        t.insert(a, a);
+        t.insert(b, b);
+        validate(&t);
     }
 }
