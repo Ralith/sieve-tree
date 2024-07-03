@@ -86,10 +86,14 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
             }
             Some(root) => {
                 root.ensure_contains(self.granularity, &bounds);
-                let target = root
-                    .embedding
-                    .bounds_from_world(self.granularity, &bounds)
-                    .location::<GRID_EXPONENT>();
+                let target_tree_bounds =
+                    root.embedding.bounds_from_world(self.granularity, &bounds);
+                let target_level = target_tree_bounds.level::<GRID_EXPONENT>();
+                let extent = cell_extent(target_level - GRID_EXPONENT);
+                let target = CellCoords {
+                    min: target_tree_bounds.min.map(|x| (x / extent) * extent),
+                    level: target_level,
+                };
                 let (node, level) = find_smallest_parent(root, target);
                 let cell = grid_index_at_level::<DIM, GRID_EXPONENT>(target.min, level);
                 (node, cell, level == target.level)
@@ -934,6 +938,37 @@ mod tests {
             })
             .count(),
             2
+        );
+    }
+
+    #[test]
+    fn regression2() {
+        let mut t = SieveTree::<1, 2, Bounds<1>>::with_granularity(1.);
+        let b1 = Bounds {
+            min: [5.],
+            max: [10.],
+        };
+        let b2 = Bounds {
+            min: [20.],
+            max: [25.],
+        };
+        t.insert(b1, b1);
+        t.insert(b2, b2);
+
+        let intersections = t
+            .intersections(Bounds {
+                min: [15.],
+                max: [45.],
+            })
+            .map(|(_, bounds)| *bounds)
+            .collect::<alloc::vec::Vec<_>>();
+
+        assert_eq!(
+            intersections,
+            alloc::vec![Bounds {
+                min: [20.],
+                max: [25.],
+            }],
         );
     }
 }
