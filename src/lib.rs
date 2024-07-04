@@ -246,6 +246,8 @@ struct InsertPoint<'a, const DIM: usize, const GRID_EXPONENT: u32> {
     node: &'a mut Node<DIM, GRID_EXPONENT>,
     node_level: u32,
     cell: usize,
+    /// Whether this is the smallest cell (the lowest level) a value with these bounds can be stored
+    /// in
     sieved: bool,
 }
 
@@ -263,7 +265,8 @@ impl<'a, const DIM: usize, const GRID_EXPONENT: u32> InsertPoint<'a, DIM, GRID_E
                     node: &mut root.node,
                     node_level: root.coords.level,
                     cell: 0,
-                    // TODO: Handle max-sized inserts
+                    // The initial root node is the smallest node that the initial element can be
+                    // stored in.
                     sieved: true,
                 }
             }
