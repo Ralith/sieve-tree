@@ -68,7 +68,7 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
                 (node, 0, true)
             }
             Some(root) => {
-                root.ensure_contains(self.granularity, &bounds);
+                root.ensure_origin_precedes(self.granularity, &bounds);
                 let bounds = root.embedding.bounds_from_world(self.granularity, &bounds);
                 let target = bounds.node_location::<GRID_EXPONENT>();
                 let (node, level) = find_smallest_parent(root, target);
@@ -89,7 +89,7 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
         let Some(root) = &mut self.root else {
             panic!("tried to update an element in an empty tree");
         };
-        root.ensure_contains(self.granularity, &new);
+        root.ensure_origin_precedes(self.granularity, &new);
         let old = root.embedding.bounds_from_world(self.granularity, &old);
         let old_coords = old.node_location::<GRID_EXPONENT>();
         let new = root.embedding.bounds_from_world(self.granularity, &new);
@@ -297,7 +297,7 @@ impl<const DIM: usize, const GRID_EXPONENT: u32> Root<DIM, GRID_EXPONENT> {
             .world_bounds_from_tree(granularity, &self.coords.bounds())
     }
 
-    fn ensure_contains(&mut self, granularity: f64, bounds: &Bounds<DIM>) {
+    fn ensure_origin_precedes(&mut self, granularity: f64, bounds: &Bounds<DIM>) {
         let current = self.world_bounds(granularity);
         if bounds.min.iter().zip(&current.min).any(|(x, y)| x < y) {
             // `bounds` falls below the area currently covered by the tree. Shift the origin
