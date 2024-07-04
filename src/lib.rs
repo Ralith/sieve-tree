@@ -102,15 +102,20 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
             insert.sieved,
         );
 
-        balance_node(
-            insert.node,
-            insert.node_level,
-            insert.embedding,
-            self.granularity,
-            &mut self.elements,
-            elements_per_node,
-            get_bounds,
-        );
+        // Sieved values are always stored on internal nodes, which store *only* sieved values and
+        // hence cannot be subdivided. Hence, this insert can only have introduced new balancing
+        // work if it was unsieved.
+        if !insert.sieved {
+            balance_node(
+                insert.node,
+                insert.node_level,
+                insert.embedding,
+                self.granularity,
+                &mut self.elements,
+                elements_per_node,
+                get_bounds,
+            );
+        }
 
         id
     }
