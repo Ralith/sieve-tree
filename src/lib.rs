@@ -62,21 +62,14 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
             next: None.into(),
         });
 
-        let (node, cell, sieved) = match &mut self.root {
-            None => {
-                let node = &mut self.root.insert(Root::new(self.granularity, bounds)).node;
-                (node, 0, true)
-            }
-            Some(root) => {
-                root.ensure_origin_precedes(self.granularity, &bounds);
-                let bounds = root.embedding.bounds_from_world(self.granularity, &bounds);
-                let target = bounds.node_location::<GRID_EXPONENT>();
-                let (node, level) = find_smallest_parent(root, target);
-                let cell = grid_index_at_level::<DIM, GRID_EXPONENT>(bounds.min, level);
-                (node, cell, level == target.level)
-            }
-        };
-        link(&mut self.elements, node, cell, id, sieved);
+        let insert = InsertPoint::find(&mut self.root, self.granularity, bounds);
+        link(
+            &mut self.elements,
+            insert.node,
+            insert.cell,
+            id,
+            insert.sieved,
+        );
 
         id
     }
@@ -260,6 +253,43 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> Default for SieveTree<DIM, G
             granularity: 0.01,
             root: None,
             elements: Slab::default(),
+        }
+    }
+}
+
+struct InsertPoint<'a, const DIM: usize, const GRID_EXPONENT: u32> {
+    node: &'a mut Node<DIM, GRID_EXPONENT>,
+    cell: usize,
+    sieved: bool,
+}
+
+impl<'a, const DIM: usize, const GRID_EXPONENT: u32> InsertPoint<'a, DIM, GRID_EXPONENT> {
+    fn find(
+        root: &'a mut Option<Root<DIM, GRID_EXPONENT>>,
+        granularity: f64,
+        bounds: Bounds<DIM>,
+    ) -> Self {
+        match root {
+            None => {
+                let node = &mut root.insert(Root::new(granularity, bounds)).node;
+                InsertPoint {
+                    node,
+                    cell: 0,
+                    // TODO: Handle max-sized inserts
+                    sieved: true,
+                }
+            }
+            Some(root) => {
+                root.ensure_origin_precedes(granularity, &bounds);
+                let bounds = root.embedding.bounds_from_world(granularity, &bounds);
+                let target = bounds.node_location::<GRID_EXPONENT>();
+                let (node, level) = find_smallest_parent(root, target);
+                InsertPoint {
+                    node,
+                    cell: grid_index_at_level::<DIM, GRID_EXPONENT>(bounds.min, level),
+                    sieved: level == target.level,
+                }
+            }
         }
     }
 }
