@@ -167,7 +167,7 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
         let Some(ref mut root) = self.root else {
             return;
         };
-        if root.node.state.children().is_none()
+        if root.node.state.is_leaf()
             && !node_needs_split::<DIM, GRID_EXPONENT>(
                 &mut root.node,
                 root.coords.level,
@@ -312,7 +312,8 @@ fn node_needs_split<const DIM: usize, const GRID_EXPONENT: u32>(
             .any(|&n| n > elements_per_cell)
 }
 
-/// Recursively split leaf nodes under `node` until `elements_per_cell` is satisfied
+/// Split `node` if it's a leaf node, and recursively split any children with cells containing more
+/// than `elements_per_cell` elements
 fn balance_node<const DIM: usize, const GRID_EXPONENT: u32, T>(
     node: &mut Node<DIM, GRID_EXPONENT>,
     node_level: u32,
@@ -377,6 +378,11 @@ fn balance_node<const DIM: usize, const GRID_EXPONENT: u32, T>(
     while let Some((level, children)) = stack.pop() {
         let level = level - 1;
         for child in children.iter_mut() {
+            // TODO: When `children` is a freshly split leaf node, use the return value of `link` in
+            // `split` to determine whether any nodes need to be split without redundantly scanning
+            // `unsieved_nodes` here. This will require heap allocation until array lengths can
+            // depend on const operations on generic parameters, so for now we just eat the extra
+            // work.
             if node_needs_split::<DIM, GRID_EXPONENT>(child, level, elements_per_cell) {
                 // Balance elements in `child`
                 split(level, child);
@@ -753,6 +759,13 @@ impl<const DIM: usize, const GRID_EXPONENT: u32> NodeState<DIM, GRID_EXPONENT> {
             NodeState::Leaf { .. } => None,
         }
     }
+
+    fn is_leaf(&self) -> bool {
+        match *self {
+            NodeState::Internal { .. } => false,
+            NodeState::Leaf { .. } => true,
+        }
+    }
 }
 
 impl<const DIM: usize, const GRID_EXPONENT: u32> Default for Node<DIM, GRID_EXPONENT> {
@@ -994,7 +1007,7 @@ mod tests {
                         max_extent,
                         extent
                     );
-                    if node.state.children().is_some() {
+                    if !node.state.is_leaf() {
                         assert!(
                             max_extent >= extent,
                             "element {} extent {} too small for non-leaf node {} with cell extent {}",
