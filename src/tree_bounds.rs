@@ -31,7 +31,7 @@ impl<const DIM: usize> TreeBounds<DIM> {
 
     /// Find the smallest node a value with these bounds could be stored in, i.e. the largest level
     /// of nodes with cells smaller than this `Bounds`'s extents on any dimension
-    pub fn location<const GRID_EXPONENT: u32>(&self) -> CellCoords<DIM> {
+    pub fn node_location<const GRID_EXPONENT: u32>(&self) -> CellCoords<DIM> {
         let level = self.level::<GRID_EXPONENT>();
         CellCoords::from_point(self.min, level)
     }

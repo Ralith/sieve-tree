@@ -89,7 +89,7 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
                 let target = root
                     .embedding
                     .bounds_from_world(self.granularity, &bounds)
-                    .location::<GRID_EXPONENT>();
+                    .node_location::<GRID_EXPONENT>();
                 let (node, level) = find_smallest_parent(root, target);
                 let cell = grid_index_at_level::<DIM, GRID_EXPONENT>(target.min, level);
                 (node, cell, level == target.level)
@@ -110,9 +110,9 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
         };
         root.ensure_contains(self.granularity, &new);
         let old = root.embedding.bounds_from_world(self.granularity, &old);
-        let old_coords = old.location::<GRID_EXPONENT>();
+        let old_coords = old.node_location::<GRID_EXPONENT>();
         let new = root.embedding.bounds_from_world(self.granularity, &new);
-        let new_coords = new.location::<GRID_EXPONENT>();
+        let new_coords = new.node_location::<GRID_EXPONENT>();
         let ancestor = old_coords.smallest_common_ancestor(&new_coords);
         let (node, level) = find_smallest_parent(root, ancestor);
 
@@ -222,7 +222,7 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
     pub fn remove(&mut self, id: usize, bounds: Bounds<DIM>) -> T {
         let root = self.root.as_mut().unwrap();
         let bounds = root.embedding.bounds_from_world(self.granularity, &bounds);
-        let target = bounds.location::<GRID_EXPONENT>();
+        let target = bounds.node_location::<GRID_EXPONENT>();
         // A value is guaranteed to be stored in the smallest existing node permitted for it, because:
         // - `insert` only introduces nodes that are siblings of or larger than the root
         // - `balance` always moves all possible elements into newly created child nodes
