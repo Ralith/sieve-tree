@@ -260,6 +260,14 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
             });
         Intersections::new(bounds, &self.elements, self.root.as_ref())
     }
+
+    pub fn iter(&self) -> impl Iterator<Item = (usize, &T)> {
+        self.elements.iter().map(|(i, x)| (i, &x.value))
+    }
+
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (usize, &mut T)> {
+        self.elements.iter_mut().map(|(i, x)| (i, &mut x.value))
+    }
 }
 
 impl<const DIM: usize, const GRID_EXPONENT: u32, T> Default for SieveTree<DIM, GRID_EXPONENT, T> {
