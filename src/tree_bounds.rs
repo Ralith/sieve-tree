@@ -37,8 +37,7 @@ impl<const DIM: usize> TreeBounds<DIM> {
     }
 
     /// Compute the index of the node at `level` containing this rect in its parent's child array,
-    /// and the index in the selected node's grid, or `None` if the value must be stored at a higher
-    /// level
+    /// or `None` if the value must be stored at a higher level
     pub fn index_in<const GRID_EXPONENT: u32>(&self, level: u32) -> Option<usize> {
         let Some(max_extent) = self.extents().into_iter().max() else {
             // 0-dimensional case
