@@ -19,6 +19,8 @@ use tree_bounds::TreeBounds;
 mod traversal;
 use traversal::Intersections;
 
+mod grid_ray;
+
 /// A `DIM`-dimensional spatial search tree
 ///
 /// Each tree node owns a grid of `2.pow(GRID_EXPONENT).pow(DIM)` cells. Increasing `GRID_EXPONENT`
