@@ -74,8 +74,7 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
         id
     }
 
-    /// Insert `value` with `bounds`, splitting nodes if necessary to preserve
-    /// `elements_per_node`
+    /// Insert `value` with `bounds`, splitting nodes if necessary to preserve `elements_per_node`
     ///
     /// Nodes modified by this method will not need to be [`balance`](Self::balance)d. Prefer this
     /// method over [`insert`](Self::insert) followed by [`balance`](Self::balance) when
