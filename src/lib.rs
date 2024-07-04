@@ -122,6 +122,31 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
     /// Similar to `remove` followed by `insert`, but preserves identity and does less work for
     /// small changes.
     pub fn update(&mut self, id: usize, old: Bounds<DIM>, new: Bounds<DIM>) {
+        self.update_inner(id, old, new, None, |_| unreachable!());
+    }
+
+    /// Update the bounds of the value associated with `id`, splitting nodes if necessary to preserve `elements_per_cell`
+    ///
+    /// See [insert_and_balance](Self::insert_and_balance) for when this should be used.
+    pub fn update_and_balance(
+        &mut self,
+        id: usize,
+        old: Bounds<DIM>,
+        new: Bounds<DIM>,
+        elements_per_cell: usize,
+        get_bounds: impl FnMut(&T) -> Bounds<DIM>,
+    ) {
+        self.update_inner(id, old, new, Some(elements_per_cell), get_bounds);
+    }
+
+    fn update_inner(
+        &mut self,
+        id: usize,
+        old: Bounds<DIM>,
+        new: Bounds<DIM>,
+        elements_per_cell: Option<usize>,
+        get_bounds: impl FnMut(&T) -> Bounds<DIM>,
+    ) {
         let Some(root) = &mut self.root else {
             panic!("tried to update an element in an empty tree");
         };
@@ -150,13 +175,28 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
         // suitable node already exists.
         let (node, level) = find_smallest_existing_parent(level, node, new_coords);
         let cell = grid_index_at_level::<DIM, GRID_EXPONENT>(new.min, level);
-        link(
+        let n = link(
             &mut self.elements,
             node,
             cell,
             id,
             new_coords.level == level,
         );
+
+        // Split the new node if necessary
+        if let Some(elements_per_cell) = elements_per_cell {
+            if n > elements_per_cell {
+                balance_node(
+                    node,
+                    new_coords.level,
+                    &root.embedding,
+                    self.granularity,
+                    &mut self.elements,
+                    elements_per_cell,
+                    get_bounds,
+                );
+            }
+        }
     }
 
     /// Recursively split cells with more than `elements_per_cell` unsieved elements
