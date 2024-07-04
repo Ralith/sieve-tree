@@ -292,6 +292,20 @@ impl<'a, const DIM: usize, const GRID_EXPONENT: u32> InsertPoint<'a, DIM, GRID_E
     }
 }
 
+/// Whether `node` at `level` should be split to preserve an `elements_per_cell` limit
+fn node_needs_split<const DIM: usize, const GRID_EXPONENT: u32>(
+    node: &mut Node<DIM, GRID_EXPONENT>,
+    level: u32,
+    elements_per_cell: usize,
+) -> bool {
+    level > GRID_EXPONENT
+        && node
+            .state
+            .unsieved_elements()
+            .iter()
+            .any(|&n| n > elements_per_cell)
+}
+
 fn balance_node<const DIM: usize, const GRID_EXPONENT: u32, T>(
     node: &mut Node<DIM, GRID_EXPONENT>,
     node_level: u32,
@@ -302,17 +316,7 @@ fn balance_node<const DIM: usize, const GRID_EXPONENT: u32, T>(
     mut get_bounds: impl FnMut(&T) -> Bounds<DIM>,
 ) {
     let mut split = |level, node: &mut Node<DIM, GRID_EXPONENT>| {
-        if level == GRID_EXPONENT {
-            // No further subdivision possible
-            return;
-        }
-        if node
-            .state
-            .unsieved_elements()
-            .iter()
-            .all(|&n| n <= elements_per_cell)
-        {
-            // Node doesn't need to be split
+        if !node_needs_split::<DIM, GRID_EXPONENT>(node, level, elements_per_cell) {
             return;
         }
         let children = node.state.ensure_children();
