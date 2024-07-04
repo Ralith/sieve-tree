@@ -86,12 +86,10 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
             }
             Some(root) => {
                 root.ensure_contains(self.granularity, &bounds);
-                let target = root
-                    .embedding
-                    .bounds_from_world(self.granularity, &bounds)
-                    .node_location::<GRID_EXPONENT>();
+                let bounds = root.embedding.bounds_from_world(self.granularity, &bounds);
+                let target = bounds.node_location::<GRID_EXPONENT>();
                 let (node, level) = find_smallest_parent(root, target);
-                let cell = grid_index_at_level::<DIM, GRID_EXPONENT>(target.min, level);
+                let cell = grid_index_at_level::<DIM, GRID_EXPONENT>(bounds.min, level);
                 (node, cell, level == target.level)
             }
         };
@@ -228,7 +226,7 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
         // - `balance` always moves all possible elements into newly created child nodes
         let (node, level) =
             find_smallest_existing_parent(root.coords.level, &mut root.node, target);
-        let cell = grid_index_at_level::<DIM, GRID_EXPONENT>(target.min, level);
+        let cell = grid_index_at_level::<DIM, GRID_EXPONENT>(bounds.min, level);
         unlink(&mut self.elements, node, cell, id, level == target.level);
         let elt = self.elements.remove(id);
         elt.value
@@ -934,6 +932,37 @@ mod tests {
             })
             .count(),
             2
+        );
+    }
+
+    #[test]
+    fn regression2() {
+        let mut t = SieveTree::<1, 2, Bounds<1>>::with_granularity(1.);
+        let b1 = Bounds {
+            min: [5.],
+            max: [10.],
+        };
+        let b2 = Bounds {
+            min: [20.],
+            max: [25.],
+        };
+        t.insert(b1, b1);
+        t.insert(b2, b2);
+
+        let intersections = t
+            .intersections(Bounds {
+                min: [15.],
+                max: [45.],
+            })
+            .map(|(_, bounds)| *bounds)
+            .collect::<alloc::vec::Vec<_>>();
+
+        assert_eq!(
+            intersections,
+            alloc::vec![Bounds {
+                min: [20.],
+                max: [25.],
+            }],
         );
     }
 }
