@@ -74,7 +74,7 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
         id
     }
 
-    /// Insert `value` with `bounds`, splitting nodes if necessary to preserve `elements_per_node`
+    /// Insert `value` with `bounds`, splitting nodes if necessary to preserve `elements_per_cell`
     ///
     /// Nodes modified by this method will not need to be [`balance`](Self::balance)d. Prefer this
     /// method over [`insert`](Self::insert) followed by [`balance`](Self::balance) when
@@ -85,7 +85,7 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
         &mut self,
         bounds: Bounds<DIM>,
         value: T,
-        elements_per_node: usize,
+        elements_per_cell: usize,
         get_bounds: impl FnMut(&T) -> Bounds<DIM>,
     ) -> usize {
         let id = self.elements.insert(Element {
@@ -112,7 +112,7 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
                 insert.embedding,
                 self.granularity,
                 &mut self.elements,
-                elements_per_node,
+                elements_per_cell,
                 get_bounds,
             );
         }
@@ -162,11 +162,11 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
         )
     }
 
-    /// Recursively split cells with more than `elements_per_cell` elements
+    /// Recursively split cells with more than `elements_per_cell` unsieved elements
     ///
     /// Call after large numbers of `insert`s or `update`s to maintain consistent search
     /// performance.
-    pub fn balance(&mut self, elements_per_node: usize, get_bounds: impl FnMut(&T) -> Bounds<DIM>) {
+    pub fn balance(&mut self, elements_per_cell: usize, get_bounds: impl FnMut(&T) -> Bounds<DIM>) {
         let Some(ref mut root) = self.root else {
             return;
         };
@@ -176,7 +176,7 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
             &root.embedding,
             self.granularity,
             &mut self.elements,
-            elements_per_node,
+            elements_per_cell,
             get_bounds,
         );
     }
@@ -298,7 +298,7 @@ fn balance_node<const DIM: usize, const GRID_EXPONENT: u32, T>(
     embedding: &Embedding<DIM>,
     granularity: f64,
     elements: &mut Slab<Element<T>>,
-    elements_per_node: usize,
+    elements_per_cell: usize,
     mut get_bounds: impl FnMut(&T) -> Bounds<DIM>,
 ) {
     let mut split = |level, node: &mut Node<DIM, GRID_EXPONENT>| {
@@ -306,8 +306,13 @@ fn balance_node<const DIM: usize, const GRID_EXPONENT: u32, T>(
             // No further subdivision possible
             return;
         }
-        if node.state.unsieved_elements() <= elements_per_node {
-            // No cells require balancing
+        if node
+            .state
+            .unsieved_elements()
+            .iter()
+            .all(|&n| n <= elements_per_cell)
+        {
+            // Node doesn't need to be split
             return;
         }
         let children = node.state.ensure_children();
@@ -497,15 +502,15 @@ fn find_smallest_existing_parent<'a, const DIM: usize, const GRID_EXPONENT: u32>
 fn link<const DIM: usize, const GRID_EXPONENT: u32, T>(
     elements: &mut Slab<Element<T>>,
     node: &mut Node<DIM, GRID_EXPONENT>,
-    cell: usize,
+    cell_idx: usize,
     element: usize,
     sieved: bool,
 ) {
-    let cell = &mut node.grid[cell];
+    let cell = &mut node.grid[cell_idx];
     let prev = mem::replace(&mut cell.first_element, Some(element).into());
     elements[element].next = prev;
     if !sieved {
-        node.state.add_unsieved();
+        node.state.add_unsieved(cell_idx);
     }
 }
 
@@ -513,12 +518,12 @@ fn link<const DIM: usize, const GRID_EXPONENT: u32, T>(
 fn unlink<const DIM: usize, const GRID_EXPONENT: u32, T>(
     elements: &mut Slab<Element<T>>,
     node: &mut Node<DIM, GRID_EXPONENT>,
-    cell: usize,
+    cell_idx: usize,
     element: usize,
     sieved: bool,
 ) {
     let successor = elements[element].next;
-    let cell = &mut node.grid[cell];
+    let cell = &mut node.grid[cell_idx];
     let mut link = &mut cell.first_element;
     loop {
         let i = link.get().expect("element missing from node list");
@@ -529,7 +534,7 @@ fn unlink<const DIM: usize, const GRID_EXPONENT: u32, T>(
         link = &mut elements[i].next;
     }
     if !sieved {
-        node.state.remove_unsieved();
+        node.state.remove_unsieved(cell_idx);
     }
 }
 
@@ -660,8 +665,8 @@ enum NodeState<const DIM: usize, const GRID_EXPONENT: u32> {
     },
     /// No children
     Leaf {
-        /// Number of values that could be moved into a child node
-        unsieved_elements: usize,
+        /// Number of values that could be moved into a child node, per cell
+        unsieved_elements: Box<[usize]>,
     },
 }
 
@@ -683,30 +688,30 @@ impl<const DIM: usize, const GRID_EXPONENT: u32> NodeState<DIM, GRID_EXPONENT> {
         }
     }
 
-    fn unsieved_elements(&self) -> usize {
-        match *self {
-            NodeState::Internal { .. } => 0,
+    fn unsieved_elements(&self) -> &[usize] {
+        match self {
+            NodeState::Internal { .. } => &[],
             NodeState::Leaf { unsieved_elements } => unsieved_elements,
         }
     }
 
-    fn add_unsieved(&mut self) {
+    fn add_unsieved(&mut self, cell: usize) {
         match *self {
             NodeState::Internal { .. } => unreachable!("adding unsieved element to internal node"),
             NodeState::Leaf {
                 ref mut unsieved_elements,
-            } => *unsieved_elements += 1,
+            } => unsieved_elements[cell] += 1,
         }
     }
 
-    fn remove_unsieved(&mut self) {
+    fn remove_unsieved(&mut self, cell: usize) {
         match *self {
             NodeState::Internal { .. } => {
                 unreachable!("removing unsieved element from internal node")
             }
             NodeState::Leaf {
                 ref mut unsieved_elements,
-            } => *unsieved_elements -= 1,
+            } => unsieved_elements[cell] -= 1,
         }
     }
 
@@ -729,7 +734,9 @@ impl<const DIM: usize, const GRID_EXPONENT: u32> Default for Node<DIM, GRID_EXPO
     fn default() -> Self {
         Self {
             state: NodeState::Leaf {
-                unsieved_elements: 0,
+                unsieved_elements: (0..SUBDIV.pow(GRID_EXPONENT).pow(DIM as u32))
+                    .map(|_| 0)
+                    .collect(),
             },
             grid: (0..SUBDIV.pow(GRID_EXPONENT).pow(DIM as u32))
                 .map(|_| Cell::default())
