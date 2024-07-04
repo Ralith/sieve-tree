@@ -164,7 +164,8 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
 
     /// Recursively split cells with more than `elements_per_cell` elements
     ///
-    /// Call after large numbers of `insert`s to maintain consistent search performance.
+    /// Call after large numbers of `insert`s or `update`s to maintain consistent search
+    /// performance.
     pub fn balance(&mut self, elements_per_node: usize, get_bounds: impl FnMut(&T) -> Bounds<DIM>) {
         let Some(ref mut root) = self.root else {
             return;
