@@ -74,6 +74,48 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
         id
     }
 
+    /// Insert `value` with `bounds`, splitting nodes if necessary to preserve
+    /// `elements_per_node`
+    ///
+    /// Nodes modified by this method will not need to be [`balance`](Self::balance)d. Prefer this
+    /// method over [`insert`](Self::insert) followed by [`balance`](Self::balance) when
+    /// intermittently inserting small numbers of elements into trees that will be traversed
+    /// heavily. Prefer calling [`balance`](Self::balance) when a large proportion of the tree has
+    /// been freshly [`insert`](Self::insert)ed or [`update`](Self::update)d
+    pub fn insert_and_balance(
+        &mut self,
+        bounds: Bounds<DIM>,
+        value: T,
+        elements_per_node: usize,
+        get_bounds: impl FnMut(&T) -> Bounds<DIM>,
+    ) -> usize {
+        let id = self.elements.insert(Element {
+            value,
+            next: None.into(),
+        });
+
+        let insert = InsertPoint::find(&mut self.root, self.granularity, bounds);
+        link(
+            &mut self.elements,
+            insert.node,
+            insert.cell,
+            id,
+            insert.sieved,
+        );
+
+        balance_node(
+            insert.node,
+            insert.node_level,
+            insert.embedding,
+            self.granularity,
+            &mut self.elements,
+            elements_per_node,
+            get_bounds,
+        );
+
+        id
+    }
+
     /// Update the bounds of the value associated with `id`
     ///
     /// Similar to `remove` followed by `insert`, but preserves identity and does less work for
@@ -119,77 +161,19 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
     /// Recursively split cells with more than `elements_per_cell` elements
     ///
     /// Call after large numbers of `insert`s to maintain consistent search performance.
-    pub fn balance(
-        &mut self,
-        elements_per_node: usize,
-        mut get_bounds: impl FnMut(&T) -> Bounds<DIM>,
-    ) {
-        let Some(root) = &mut self.root else {
+    pub fn balance(&mut self, elements_per_node: usize, get_bounds: impl FnMut(&T) -> Bounds<DIM>) {
+        let Some(ref mut root) = self.root else {
             return;
         };
-        let mut split = |level, node: &mut Node<DIM, GRID_EXPONENT>| {
-            if level == GRID_EXPONENT {
-                // No further subdivision possible
-                return;
-            }
-            if node.state.unsieved_elements() <= elements_per_node {
-                // No cells require balancing
-                return;
-            }
-            let children = node.state.ensure_children();
-            // Check every cell for unsieved elements to split
-            for cell in &mut *node.grid {
-                let mut next_elt = cell.first_element;
-                let mut prev_elt = None;
-                while let Some(element) = next_elt.get() {
-                    next_elt = self.elements[element].next;
-                    let bounds = root.embedding.bounds_from_world(
-                        self.granularity,
-                        &get_bounds(&self.elements[element].value),
-                    );
-                    let Some(child_node_idx) = bounds.index_in::<GRID_EXPONENT>(level - 1) else {
-                        // Too large to move into children
-                        prev_elt = Some(element);
-                        continue;
-                    };
-                    let cell_idx = grid_index_at_level::<DIM, GRID_EXPONENT>(bounds.min, level - 1);
-                    let target_level = bounds.level::<GRID_EXPONENT>();
-                    // Link into child
-                    link(
-                        &mut self.elements,
-                        &mut children[child_node_idx],
-                        cell_idx,
-                        element,
-                        target_level == level - 1,
-                    );
-                    // Unlink from `node`
-                    let prev_link = match prev_elt {
-                        None => &mut cell.first_element,
-                        Some(x) => &mut self.elements[x].next,
-                    };
-                    *prev_link = next_elt;
-                }
-            }
-        };
-
-        // See comment on `DepthFirstTraversal::queue`
-        let mut stack = ArrayVec::<(u32, &mut [Node<DIM, GRID_EXPONENT>]), MAX_DEPTH>::new();
-        split(root.coords.level, &mut root.node);
-        if let Some(children) = root.node.state.children_mut() {
-            stack.push((root.coords.level, children));
-        }
-        while let Some((level, children)) = stack.pop() {
-            let level = level - 1;
-            for child in children.iter_mut() {
-                // Balance elements in `child`
-                split(level, child);
-
-                // Queue grandchildren for balancing
-                if let Some(grandchildren) = child.state.children_mut() {
-                    stack.push((level, grandchildren));
-                }
-            }
-        }
+        balance_node(
+            &mut root.node,
+            root.coords.level,
+            &root.embedding,
+            self.granularity,
+            &mut self.elements,
+            elements_per_node,
+            get_bounds,
+        );
     }
 
     /// Remove the value associated with `id`
@@ -258,7 +242,9 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> Default for SieveTree<DIM, G
 }
 
 struct InsertPoint<'a, const DIM: usize, const GRID_EXPONENT: u32> {
+    embedding: &'a Embedding<DIM>,
     node: &'a mut Node<DIM, GRID_EXPONENT>,
+    node_level: u32,
     cell: usize,
     sieved: bool,
 }
@@ -271,9 +257,11 @@ impl<'a, const DIM: usize, const GRID_EXPONENT: u32> InsertPoint<'a, DIM, GRID_E
     ) -> Self {
         match root {
             None => {
-                let node = &mut root.insert(Root::new(granularity, bounds)).node;
+                let root = root.insert(Root::new(granularity, bounds));
                 InsertPoint {
-                    node,
+                    embedding: &root.embedding,
+                    node: &mut root.node,
+                    node_level: root.coords.level,
                     cell: 0,
                     // TODO: Handle max-sized inserts
                     sieved: true,
@@ -285,10 +273,84 @@ impl<'a, const DIM: usize, const GRID_EXPONENT: u32> InsertPoint<'a, DIM, GRID_E
                 let target = bounds.node_location::<GRID_EXPONENT>();
                 let (node, level) = find_smallest_parent(&mut root.node, &mut root.coords, target);
                 InsertPoint {
+                    embedding: &root.embedding,
                     node,
+                    node_level: level,
                     cell: grid_index_at_level::<DIM, GRID_EXPONENT>(bounds.min, level),
                     sieved: level == target.level,
                 }
+            }
+        }
+    }
+}
+
+fn balance_node<const DIM: usize, const GRID_EXPONENT: u32, T>(
+    node: &mut Node<DIM, GRID_EXPONENT>,
+    node_level: u32,
+    embedding: &Embedding<DIM>,
+    granularity: f64,
+    elements: &mut Slab<Element<T>>,
+    elements_per_node: usize,
+    mut get_bounds: impl FnMut(&T) -> Bounds<DIM>,
+) {
+    let mut split = |level, node: &mut Node<DIM, GRID_EXPONENT>| {
+        if level == GRID_EXPONENT {
+            // No further subdivision possible
+            return;
+        }
+        if node.state.unsieved_elements() <= elements_per_node {
+            // No cells require balancing
+            return;
+        }
+        let children = node.state.ensure_children();
+        // Check every cell for unsieved elements to split
+        for cell in &mut *node.grid {
+            let mut next_elt = cell.first_element;
+            let mut prev_elt = None;
+            while let Some(element) = next_elt.get() {
+                next_elt = elements[element].next;
+                let bounds =
+                    embedding.bounds_from_world(granularity, &get_bounds(&elements[element].value));
+                let Some(child_node_idx) = bounds.index_in::<GRID_EXPONENT>(level - 1) else {
+                    // Too large to move into children
+                    prev_elt = Some(element);
+                    continue;
+                };
+                let cell_idx = grid_index_at_level::<DIM, GRID_EXPONENT>(bounds.min, level - 1);
+                let target_level = bounds.level::<GRID_EXPONENT>();
+                // Link into child
+                link(
+                    elements,
+                    &mut children[child_node_idx],
+                    cell_idx,
+                    element,
+                    target_level == level - 1,
+                );
+                // Unlink from `node`
+                let prev_link = match prev_elt {
+                    None => &mut cell.first_element,
+                    Some(x) => &mut elements[x].next,
+                };
+                *prev_link = next_elt;
+            }
+        }
+    };
+
+    // See comment on `DepthFirstTraversal::queue`
+    let mut stack = ArrayVec::<(u32, &mut [Node<DIM, GRID_EXPONENT>]), MAX_DEPTH>::new();
+    split(node_level, node);
+    if let Some(children) = node.state.children_mut() {
+        stack.push((node_level, children));
+    }
+    while let Some((level, children)) = stack.pop() {
+        let level = level - 1;
+        for child in children.iter_mut() {
+            // Balance elements in `child`
+            split(level, child);
+
+            // Queue grandchildren for balancing
+            if let Some(grandchildren) = child.state.children_mut() {
+                stack.push((level, grandchildren));
             }
         }
     }
