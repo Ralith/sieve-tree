@@ -88,7 +88,7 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
         let new = root.embedding.bounds_from_world(self.granularity, &new);
         let new_coords = new.node_location::<GRID_EXPONENT>();
         let ancestor = old_coords.smallest_common_ancestor(&new_coords);
-        let (node, level) = find_smallest_parent(root, ancestor);
+        let (node, level) = find_smallest_parent(&mut root.node, &mut root.coords, ancestor);
 
         // Remove from old location
         {
@@ -283,7 +283,7 @@ impl<'a, const DIM: usize, const GRID_EXPONENT: u32> InsertPoint<'a, DIM, GRID_E
                 root.ensure_origin_precedes(granularity, &bounds);
                 let bounds = root.embedding.bounds_from_world(granularity, &bounds);
                 let target = bounds.node_location::<GRID_EXPONENT>();
-                let (node, level) = find_smallest_parent(root, target);
+                let (node, level) = find_smallest_parent(&mut root.node, &mut root.coords, target);
                 InsertPoint {
                     node,
                     cell: grid_index_at_level::<DIM, GRID_EXPONENT>(bounds.min, level),
@@ -359,21 +359,22 @@ impl<const DIM: usize, const GRID_EXPONENT: u32> Root<DIM, GRID_EXPONENT> {
 }
 
 /// Look up the smallest existing parent of `target`, uprooting the tree if necessary
-fn find_smallest_parent<const DIM: usize, const GRID_EXPONENT: u32>(
-    root: &mut Root<DIM, GRID_EXPONENT>,
+fn find_smallest_parent<'a, const DIM: usize, const GRID_EXPONENT: u32>(
+    root: &'a mut Node<DIM, GRID_EXPONENT>,
+    root_coords: &mut CellCoords<DIM>,
     target: CellCoords<DIM>,
-) -> (&mut Node<DIM, GRID_EXPONENT>, u32) {
-    let ancestor = root.coords.smallest_common_ancestor(&target);
-    if ancestor == root.coords {
-        return find_smallest_existing_parent(root.coords.level, &mut root.node, target);
+) -> (&'a mut Node<DIM, GRID_EXPONENT>, u32) {
+    let ancestor = root_coords.smallest_common_ancestor(&target);
+    if ancestor == *root_coords {
+        return find_smallest_existing_parent(root_coords.level, root, target);
     }
     // Create new root that encloses both old root and target
-    let old_root = mem::take(&mut root.node);
-    let old_root_coords = mem::replace(&mut root.coords, ancestor);
+    let old_root = mem::take(root);
+    let old_root_coords = mem::replace(root_coords, ancestor);
 
     // Reattach the old root under the new root
-    let mut current = &mut root.node;
-    let mut current_level = root.coords.level;
+    let mut current = &mut *root;
+    let mut current_level = root_coords.level;
     while current_level > old_root_coords.level {
         let children = current.state.ensure_children();
         current_level -= 1;
@@ -384,14 +385,14 @@ fn find_smallest_parent<const DIM: usize, const GRID_EXPONENT: u32>(
 
     let (level, node) = if target.level < ancestor.level {
         // Return the child of the new root that encloses `target`
-        let index = child_index_at_level::<DIM>(target.min, root.coords.level - 1);
+        let index = child_index_at_level::<DIM>(target.min, root_coords.level - 1);
         (
-            root.coords.level - 1,
-            &mut root.node.state.children_mut().unwrap()[index],
+            root_coords.level - 1,
+            &mut root.state.children_mut().unwrap()[index],
         )
     } else {
         // Ancestor is target
-        (root.coords.level, &mut root.node)
+        (root_coords.level, root)
     };
     (node, level)
 }
