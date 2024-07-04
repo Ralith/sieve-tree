@@ -64,24 +64,7 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
 
         let (node, cell, sieved) = match &mut self.root {
             None => {
-                let embedding = Embedding { origin: bounds.min };
-                let extent = embedding
-                    .bounds_from_world(self.granularity, &bounds)
-                    .extents()
-                    .into_iter()
-                    .max();
-                let coords = CellCoords {
-                    min: [0; DIM],
-                    level: extent.map_or(0, level_for_extent) + GRID_EXPONENT,
-                };
-                let node = &mut self
-                    .root
-                    .insert(Root {
-                        embedding,
-                        coords,
-                        node: Node::default(),
-                    })
-                    .node;
+                let node = &mut self.root.insert(Root::new(self.granularity, bounds)).node;
                 (node, 0, true)
             }
             Some(root) => {
@@ -289,6 +272,26 @@ struct Root<const DIM: usize, const GRID_EXPONENT: u32> {
 }
 
 impl<const DIM: usize, const GRID_EXPONENT: u32> Root<DIM, GRID_EXPONENT> {
+    fn new(granularity: f64, first_element: Bounds<DIM>) -> Self {
+        let embedding = Embedding {
+            origin: first_element.min,
+        };
+        let extent = embedding
+            .bounds_from_world(granularity, &first_element)
+            .extents()
+            .into_iter()
+            .max();
+        let coords = CellCoords {
+            min: [0; DIM],
+            level: extent.map_or(0, level_for_extent) + GRID_EXPONENT,
+        };
+        Root {
+            embedding,
+            coords,
+            node: Node::default(),
+        }
+    }
+
     fn world_bounds(&self, granularity: f64) -> Bounds<DIM> {
         self.embedding
             .world_bounds_from_tree(granularity, &self.coords.bounds())
