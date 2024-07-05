@@ -763,6 +763,14 @@ enum NodeState<const DIM: usize, const GRID_EXPONENT: u32> {
 }
 
 impl<const DIM: usize, const GRID_EXPONENT: u32> NodeState<DIM, GRID_EXPONENT> {
+    fn empty() -> Self {
+        NodeState::Leaf {
+            unsieved_elements: (0..SUBDIV.pow(GRID_EXPONENT).pow(DIM as u32))
+                .map(|_| 0)
+                .collect(),
+        }
+    }
+
     fn ensure_children(&mut self) -> &mut [Node<DIM, GRID_EXPONENT>] {
         match self {
             NodeState::Internal { children } => children,
@@ -836,11 +844,7 @@ impl<const DIM: usize, const GRID_EXPONENT: u32> Default for Node<DIM, GRID_EXPO
     fn default() -> Self {
         Self {
             elements: 0,
-            state: NodeState::Leaf {
-                unsieved_elements: (0..SUBDIV.pow(GRID_EXPONENT).pow(DIM as u32))
-                    .map(|_| 0)
-                    .collect(),
-            },
+            state: NodeState::empty(),
             grid: (0..SUBDIV.pow(GRID_EXPONENT).pow(DIM as u32))
                 .map(|_| Cell::default())
                 .collect(),
