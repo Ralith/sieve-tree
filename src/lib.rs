@@ -691,8 +691,8 @@ struct Node<const DIM: usize, const GRID_EXPONENT: u32> {
 impl<const DIM: usize, const GRID_EXPONENT: u32> fmt::Debug for Node<DIM, GRID_EXPONENT> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Node")
+            .field("grid", &GridElements::<DIM, GRID_EXPONENT>(&*self.grid))
             .field("state", &self.state)
-            .field("elements", &GridElements::<DIM, GRID_EXPONENT>(&*self.grid))
             .finish()
     }
 }
