@@ -54,6 +54,15 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
         }
     }
 
+    pub fn len(&self) -> usize {
+        // We could just use `self.elements.len()`, but this makes it easier to test element counting
+        self.root.as_ref().map_or(0, |x| x.node.elements)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     /// Insert `value` into the best existing location in the tree, returning an ID that can be used
     /// to access it directly
     pub fn insert(&mut self, bounds: Bounds<DIM>, value: T) -> usize {
@@ -156,11 +165,11 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
         let new = root.embedding.bounds_from_world(self.granularity, &new);
         let new_coords = new.node_location::<GRID_EXPONENT>();
         let ancestor = old_coords.smallest_common_ancestor(&new_coords);
-        let (node, level) = find_smallest_parent(&mut root.node, &mut root.coords, ancestor);
+        let (node, level) = find_smallest_parent(&mut root.node, &mut root.coords, ancestor, 0);
 
         // Remove from old location
         {
-            let (node, level) = find_smallest_existing_parent(level, node, old_coords);
+            let (node, level) = find_smallest_existing_parent(level, node, old_coords, -1);
             let cell = grid_index_at_level::<DIM, GRID_EXPONENT>(old.min, level);
             unlink(
                 &mut self.elements,
@@ -173,7 +182,7 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
 
         // Insert into new location. Because `ancestor` was created if necessary, we know that a
         // suitable node already exists.
-        let (node, level) = find_smallest_existing_parent(level, node, new_coords);
+        let (node, level) = find_smallest_existing_parent(level, node, new_coords, 1);
         let cell = grid_index_at_level::<DIM, GRID_EXPONENT>(new.min, level);
         let n = link(
             &mut self.elements,
@@ -236,7 +245,7 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
         // - `insert` only introduces nodes that are siblings of or larger than the root
         // - `balance` always moves all possible elements into newly created child nodes
         let (node, level) =
-            find_smallest_existing_parent(root.coords.level, &mut root.node, target);
+            find_smallest_existing_parent(root.coords.level, &mut root.node, target, -1);
         let cell = grid_index_at_level::<DIM, GRID_EXPONENT>(bounds.min, level);
         unlink(&mut self.elements, node, cell, id, level == target.level);
         let elt = self.elements.remove(id);
@@ -311,6 +320,7 @@ impl<'a, const DIM: usize, const GRID_EXPONENT: u32> InsertPoint<'a, DIM, GRID_E
         match root {
             None => {
                 let root = root.insert(Root::new(granularity, bounds));
+                root.node.elements += 1;
                 InsertPoint {
                     embedding: &root.embedding,
                     node: &mut root.node,
@@ -325,7 +335,8 @@ impl<'a, const DIM: usize, const GRID_EXPONENT: u32> InsertPoint<'a, DIM, GRID_E
                 root.ensure_origin_precedes(granularity, &bounds);
                 let bounds = root.embedding.bounds_from_world(granularity, &bounds);
                 let target = bounds.node_location::<GRID_EXPONENT>();
-                let (node, level) = find_smallest_parent(&mut root.node, &mut root.coords, target);
+                let (node, level) =
+                    find_smallest_parent(&mut root.node, &mut root.coords, target, 1);
                 InsertPoint {
                     embedding: &root.embedding,
                     node,
@@ -505,19 +516,27 @@ fn find_smallest_parent<'a, const DIM: usize, const GRID_EXPONENT: u32>(
     root: &'a mut Node<DIM, GRID_EXPONENT>,
     root_coords: &mut CellCoords<DIM>,
     target: CellCoords<DIM>,
+    new_elements: usize,
 ) -> (&'a mut Node<DIM, GRID_EXPONENT>, u32) {
     let ancestor = root_coords.smallest_common_ancestor(&target);
     if ancestor == *root_coords {
-        return find_smallest_existing_parent(root_coords.level, root, target);
+        return find_smallest_existing_parent(
+            root_coords.level,
+            root,
+            target,
+            new_elements as isize,
+        );
     }
     // Create new root that encloses both old root and target
     let old_root = mem::take(root);
     let old_root_coords = mem::replace(root_coords, ancestor);
+    root.elements = new_elements;
 
     // Reattach the old root under the new root
     let mut current = &mut *root;
     let mut current_level = root_coords.level;
     while current_level > old_root_coords.level {
+        current.elements += old_root.elements;
         let children = current.state.ensure_children();
         current_level -= 1;
         let index = child_index_at_level::<DIM>(old_root_coords.min, current_level);
@@ -528,10 +547,9 @@ fn find_smallest_parent<'a, const DIM: usize, const GRID_EXPONENT: u32>(
     let (level, node) = if target.level < ancestor.level {
         // Return the child of the new root that encloses `target`
         let index = child_index_at_level::<DIM>(target.min, root_coords.level - 1);
-        (
-            root_coords.level - 1,
-            &mut root.state.children_mut().unwrap()[index],
-        )
+        let node = &mut root.state.children_mut().unwrap()[index];
+        node.elements += new_elements;
+        (root_coords.level - 1, node)
     } else {
         // Ancestor is target
         (root_coords.level, root)
@@ -543,9 +561,11 @@ fn find_smallest_existing_parent<'a, const DIM: usize, const GRID_EXPONENT: u32>
     start_level: u32,
     start_node: &'a mut Node<DIM, GRID_EXPONENT>,
     target: CellCoords<DIM>,
+    element_count_change: isize,
 ) -> (&'a mut Node<DIM, GRID_EXPONENT>, u32) {
     let mut current = start_node;
     let mut current_level = start_level;
+    current.elements = (current.elements as isize + element_count_change) as usize;
     {
         while let Some(children) = current.state.children_mut() {
             if current_level == target.level {
@@ -560,6 +580,7 @@ fn find_smallest_existing_parent<'a, const DIM: usize, const GRID_EXPONENT: u32>
                     &'a mut Node<DIM, GRID_EXPONENT>,
                 >(&mut children[index]);
             }
+            current.elements = (current.elements as isize + element_count_change) as usize;
         }
     }
     (current, current_level)
@@ -683,6 +704,8 @@ impl<const DIM: usize> Bounds<DIM> {
 }
 
 struct Node<const DIM: usize, const GRID_EXPONENT: u32> {
+    /// Number of elements stored in or beneath this node
+    elements: usize,
     state: NodeState<DIM, GRID_EXPONENT>,
     // This should become `[Node<DIM, GRID_EXPONENT>; SUBDIV.pow(GRID_EXPONENT).pow(DIM)]` as soon as Rust permits that
     grid: Box<[Cell]>,
@@ -691,6 +714,7 @@ struct Node<const DIM: usize, const GRID_EXPONENT: u32> {
 impl<const DIM: usize, const GRID_EXPONENT: u32> fmt::Debug for Node<DIM, GRID_EXPONENT> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Node")
+            .field("elements", &self.elements)
             .field("grid", &GridElements::<DIM, GRID_EXPONENT>(&*self.grid))
             .field("state", &self.state)
             .finish()
@@ -811,6 +835,7 @@ impl<const DIM: usize, const GRID_EXPONENT: u32> NodeState<DIM, GRID_EXPONENT> {
 impl<const DIM: usize, const GRID_EXPONENT: u32> Default for Node<DIM, GRID_EXPONENT> {
     fn default() -> Self {
         Self {
+            elements: 0,
             state: NodeState::Leaf {
                 unsieved_elements: (0..SUBDIV.pow(GRID_EXPONENT).pow(DIM as u32))
                     .map(|_| 0)
@@ -1107,6 +1132,35 @@ mod tests {
         assert_eq!(index_coords::<3, 1>(5), [1, 0, 1]);
         assert_eq!(index_coords::<3, 1>(6), [0, 1, 1]);
         assert_eq!(index_coords::<3, 1>(7), [1, 1, 1]);
+    }
+
+    #[test]
+    fn element_counting() {
+        let mut tree = SieveTree::<1, 1, ()>::new();
+        let a = Bounds {
+            min: [0.0],
+            max: [1.0],
+        };
+        let ai = tree.insert(a, ());
+        assert_eq!(tree.len(), 1);
+        let b = Bounds {
+            min: [-10.0],
+            max: [3.0],
+        };
+        let bi = tree.insert(b, ());
+        assert_eq!(tree.len(), 2);
+        let c = Bounds {
+            min: [-10.0],
+            max: [-9.0],
+        };
+        let ci = tree.insert(c, ());
+        assert_eq!(tree.len(), 3);
+        tree.remove(bi, b);
+        assert_eq!(tree.len(), 2);
+        tree.remove(ai, a);
+        assert_eq!(tree.len(), 1);
+        tree.remove(ci, c);
+        assert_eq!(tree.len(), 0);
     }
 
     #[test]
