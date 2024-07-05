@@ -86,6 +86,9 @@ impl<'a, const DIM: usize, const GRID_EXPONENT: u32, T> Iterator
             if let Some(coords) = self.next_child.next() {
                 let index = coords.index_in_parent();
                 let child = &self.children[index];
+                if child.elements == 0 {
+                    continue;
+                }
                 self.traversal.push(coords, child);
                 self.grid = &child.grid;
                 self.next_cell = coords.cells_overlapping::<GRID_EXPONENT>(&self.bounds);
