@@ -169,20 +169,22 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
 
         // Remove from old location
         {
-            let (node, level) = find_smallest_existing_parent(level, node, old_coords, -1);
-            let cell = grid_index_at_level::<DIM, GRID_EXPONENT>(old.min, level);
-            unlink(
-                &mut self.elements,
-                node,
-                cell,
-                id,
-                level == old_coords.level,
-            );
+            if let Some((node, level)) = find_smallest_existing_parent(level, node, old_coords, -1)
+            {
+                let cell = grid_index_at_level::<DIM, GRID_EXPONENT>(old.min, level);
+                unlink(
+                    &mut self.elements,
+                    node,
+                    cell,
+                    id,
+                    level == old_coords.level,
+                );
+            }
         }
 
         // Insert into new location. Because `ancestor` was created if necessary, we know that a
         // suitable node already exists.
-        let (node, level) = find_smallest_existing_parent(level, node, new_coords, 1);
+        let (node, level) = find_smallest_existing_parent(level, node, new_coords, 1).unwrap();
         let cell = grid_index_at_level::<DIM, GRID_EXPONENT>(new.min, level);
         let n = link(
             &mut self.elements,
@@ -244,10 +246,12 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
         // A value is guaranteed to be stored in the smallest existing node permitted for it, because:
         // - `insert` only introduces nodes that are siblings of or larger than the root
         // - `balance` always moves all possible elements into newly created child nodes
-        let (node, level) =
-            find_smallest_existing_parent(root.coords.level, &mut root.node, target, -1);
-        let cell = grid_index_at_level::<DIM, GRID_EXPONENT>(bounds.min, level);
-        unlink(&mut self.elements, node, cell, id, level == target.level);
+        if let Some((node, level)) =
+            find_smallest_existing_parent(root.coords.level, &mut root.node, target, -1)
+        {
+            let cell = grid_index_at_level::<DIM, GRID_EXPONENT>(bounds.min, level);
+            unlink(&mut self.elements, node, cell, id, level == target.level);
+        }
         let elt = self.elements.remove(id);
         elt.value
     }
@@ -525,7 +529,8 @@ fn find_smallest_parent<'a, const DIM: usize, const GRID_EXPONENT: u32>(
             root,
             target,
             new_elements as isize,
-        );
+        )
+        .unwrap();
     }
     // Create new root that encloses both old root and target
     let old_root = mem::take(root);
@@ -562,7 +567,7 @@ fn find_smallest_existing_parent<'a, const DIM: usize, const GRID_EXPONENT: u32>
     start_node: &'a mut Node<DIM, GRID_EXPONENT>,
     target: CellCoords<DIM>,
     element_count_change: isize,
-) -> (&'a mut Node<DIM, GRID_EXPONENT>, u32) {
+) -> Option<(&'a mut Node<DIM, GRID_EXPONENT>, u32)> {
     let mut current = start_node;
     let mut current_level = start_level;
     current.elements = (current.elements as isize + element_count_change) as usize;
@@ -571,6 +576,16 @@ fn find_smallest_existing_parent<'a, const DIM: usize, const GRID_EXPONENT: u32>
             if current_level == target.level {
                 break;
             }
+            if current.elements == 0 {
+                debug_assert!(
+                    element_count_change < 0,
+                    "nodes only become empty when removing elements"
+                );
+                // Entire subtree is no longer populated; free it rather than traversing further.
+                current.state = NodeState::empty();
+                return None;
+            }
+            // Traverse to the child of `current` that contains `target`
             current_level -= 1;
             let index = child_index_at_level::<DIM>(target.min, current_level);
             // Hack around borrowck limitation
@@ -583,7 +598,7 @@ fn find_smallest_existing_parent<'a, const DIM: usize, const GRID_EXPONENT: u32>
             current.elements = (current.elements as isize + element_count_change) as usize;
         }
     }
-    (current, current_level)
+    Some((current, current_level))
 }
 
 /// Add `element` to `cell`, returning the number of unsieved elements now in that cell
