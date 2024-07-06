@@ -22,7 +22,7 @@ use traversal::Intersections;
 /// Each tree node owns a grid of `2.pow(GRID_EXPONENT).pow(DIM)` cells. Increasing `GRID_EXPONENT`
 /// makes the tree less sparse, which accelerates random access by reducing indirection in exchange
 /// for exponentially increased memory requirements and less precise balancing.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SieveTree<const DIM: usize, const GRID_EXPONENT: u32, T> {
     /// Length of a level 0 node edge in world space
     granularity: f64,
@@ -274,19 +274,18 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
 
     /// Traverse all elements that might intersect with `bounds`
     pub fn intersections(&self, bounds: Bounds<DIM>) -> Intersections<'_, DIM, GRID_EXPONENT, T> {
-        let bounds = self
-            .root
-            .as_ref()
-            .and_then(|x| {
-                // If the intersection test max bounds are before the tree's origin, then we can
-                // skip the intersection test entirely
-                let max = x.embedding.tree_from_world_checked(self.granularity, &bounds.max)?;
+        let bounds = self.root.as_ref().and_then(|x| {
+            // If the intersection test max bounds are before the tree's origin, then we can
+            // skip the intersection test entirely
+            let max = x
+                .embedding
+                .tree_from_world_checked(self.granularity, &bounds.max)?;
 
-                // `min` will saturate so we don't need to check it
-                let min = x.embedding.tree_from_world(self.granularity, &bounds.min);
+            // `min` will saturate so we don't need to check it
+            let min = x.embedding.tree_from_world(self.granularity, &bounds.min);
 
-                Some(TreeBounds { min, max })
-            });
+            Some(TreeBounds { min, max })
+        });
         Intersections::new(bounds, &self.elements, self.root.as_ref())
     }
 
@@ -456,7 +455,7 @@ fn balance_node<const DIM: usize, const GRID_EXPONENT: u32, T>(
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Root<const DIM: usize, const GRID_EXPONENT: u32> {
     embedding: Embedding<DIM>,
     coords: CellCoords<DIM>,
@@ -648,7 +647,7 @@ fn unlink<const DIM: usize, const GRID_EXPONENT: u32, T>(
 }
 
 /// Mapping between tree coordinates and world coordinates
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Embedding<const DIM: usize> {
     /// Lower bound of the tree in world space
     origin: [f64; DIM],
@@ -744,6 +743,7 @@ impl<const DIM: usize> Bounds<DIM> {
     }
 }
 
+#[derive(Clone)]
 struct Node<const DIM: usize, const GRID_EXPONENT: u32> {
     /// Number of elements stored in or beneath this node
     elements: usize,
@@ -789,7 +789,7 @@ fn index_coords<const DIM: usize, const GRID_EXPONENT: u32>(index: usize) -> [u6
     })
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum NodeState<const DIM: usize, const GRID_EXPONENT: u32> {
     /// Has children, and contains only values too large to be stored at a lower level
     Internal {
@@ -893,12 +893,12 @@ impl<const DIM: usize, const GRID_EXPONENT: u32> Default for Node<DIM, GRID_EXPO
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 struct Cell {
     first_element: MaybeIndex,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Element<T> {
     value: T,
     next: MaybeIndex,
