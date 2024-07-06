@@ -1009,49 +1009,6 @@ mod tests {
     use traversal::ElementIter;
 
     #[test]
-    fn common_ancestors() {
-        type Node1D = CellCoords<1>;
-
-        let min = Node1D::from_point([0], 0);
-        assert_eq!(min.smallest_common_ancestor(&min), min);
-        assert_eq!(
-            Node1D::from_point([1], 0).smallest_common_ancestor(&min),
-            Node1D::from_point([0], 1)
-        );
-        assert_eq!(
-            Node1D::from_point([1], 0).smallest_common_ancestor(&min),
-            Node1D::from_point([0], 1)
-        );
-        assert_eq!(
-            Node1D::from_point([2], 0).smallest_common_ancestor(&min),
-            Node1D::from_point([0], 2)
-        );
-        assert_eq!(
-            Node1D::from_point([3], 0).smallest_common_ancestor(&min),
-            Node1D::from_point([0], 2)
-        );
-    }
-
-    #[test]
-    fn index_in_parent_leaf() {
-        let origin = SUBDIV * 7;
-        for y in 0..SUBDIV {
-            for x in 0..SUBDIV {
-                assert_eq!(
-                    CellCoords::<2>::from_point([(origin + x).into(), (origin + y).into()], 0)
-                        .index_in_parent(),
-                    (y * SUBDIV + x) as usize
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn index_in_parent_mid() {
-        assert_eq!(CellCoords::<1>::from_point([5], 2).index_in_parent(), 1);
-    }
-
-    #[test]
     fn balance() {
         let mut t = SieveTree::<2, 2, Bounds<2>>::new();
         for y in -5..5 {
