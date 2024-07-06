@@ -17,7 +17,7 @@ mod tree_bounds;
 use tree_bounds::TreeBounds;
 
 mod traversal;
-use traversal::Intersections;
+use traversal::{Intersections, Ray};
 
 mod grid_ray;
 
@@ -292,6 +292,14 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
             Some(TreeBounds { min, max })
         });
         Intersections::new(bounds, &self.elements, self.root.as_ref())
+    }
+
+    pub fn cast_ray(
+        &self,
+        origin: [f64; DIM],
+        direction: [f64; DIM],
+    ) -> Ray<'_, DIM, GRID_EXPONENT, T> {
+        Ray::new(&self.elements, self.root.as_ref(), origin, direction)
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (usize, &T)> {
@@ -724,7 +732,8 @@ fn child_index_at_level<const DIM: usize>(point: [u64; DIM], level: u32) -> usiz
     index_from_local_coords(&local_coords, SUBDIV.into())
 }
 
-/// Index of the cell containing `point` in the grid of a node at `level`
+/// Index of the cell containing `point` in the grid of a node at `level`, assuming it lies within
+/// the grid
 fn grid_index_at_level<const DIM: usize, const GRID_EXPONENT: u32>(
     point: [u64; DIM],
     level: u32,
@@ -1007,6 +1016,9 @@ impl fmt::Debug for MaybeIndex {
 #[cfg(test)]
 mod tests {
     extern crate std;
+    use std::dbg;
+    use std::prelude::rust_2021::*;
+
     use super::*;
     use traversal::ElementIter;
 
@@ -1279,5 +1291,59 @@ mod tests {
             .collect::<alloc::vec::Vec<_>>();
 
         assert_eq!(intersections, []);
+    }
+
+    #[test]
+    fn ray_vs_nothing() {
+        let tree = SieveTree::<1, 1, Bounds<1>>::new();
+        assert!(tree.cast_ray([0.0], [1.0]).next().is_none());
+        assert!(tree.cast_ray([0.0], [-1.0]).next().is_none());
+    }
+
+    #[test]
+    fn ray_1d_single() {
+        let mut tree = SieveTree::<1, 1, Bounds<1>>::new();
+        let p = Bounds::point([2.0]);
+        tree.insert(p, p);
+        assert_eq!(tree.cast_ray([0.0], [1.0]).next(), Some((0, &p)));
+        assert_eq!(tree.cast_ray([4.0], [-1.0]).next(), Some((0, &p)));
+        assert!(tree.cast_ray([4.0], [1.0]).next().is_none());
+        assert!(tree.cast_ray([0.0], [-1.0]).next().is_none());
+    }
+
+    #[test]
+    fn ray_1d_deep() {
+        let mut tree = SieveTree::<1, 1, Bounds<1>>::new();
+        for i in 0..4 {
+            insert_bound(&mut tree, Bounds::point([i as f64]));
+        }
+        let big = Bounds {
+            min: [0.0],
+            max: [3.0],
+        };
+        insert_bound(&mut tree, big);
+        dbg!(&tree);
+
+        let hits = tree.cast_ray([-1.0], [1.0]).collect::<Vec<_>>();
+        dbg!(&hits);
+        for i in 0..4 {
+            assert!(hits.contains(&(i, &Bounds::point([i as f64]))));
+        }
+        assert!(hits.contains(&(4, &big)));
+
+        let hits = tree.cast_ray([2.0], [1.0]).collect::<Vec<_>>();
+        dbg!(&hits);
+        for i in 2..4 {
+            assert!(hits.contains(&(i, &Bounds::point([i as f64]))));
+        }
+        assert!(!hits.contains(&(0, &Bounds::point([0.0]))));
+        assert!(hits.contains(&(4, &big)));
+    }
+
+    fn insert_bound<const DIM: usize, const GRID_EXPONENT: u32>(
+        tree: &mut SieveTree<DIM, GRID_EXPONENT, Bounds<DIM>>,
+        bounds: Bounds<DIM>,
+    ) {
+        tree.insert_and_balance(bounds, bounds, 1, |x| *x);
     }
 }

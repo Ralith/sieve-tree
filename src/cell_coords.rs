@@ -1,11 +1,11 @@
 #[cfg(test)]
 use core::fmt;
-use core::mem;
+use core::{array, mem};
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
-use crate::{grid_size, index_from_local_coords, TreeBounds, SUBDIV};
+use crate::{grid_size, index_coords, index_from_local_coords, TreeBounds, SUBDIV};
 
 /// Identifies a single cell, anywhere in tree space
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -25,6 +25,17 @@ impl<const DIM: usize> CellCoords<DIM> {
             min: point.map(|x| (x / extent) * extent),
             level,
         }
+    }
+
+    pub fn child(&self, index: usize) -> Option<Self> {
+        debug_assert!(index < (SUBDIV as usize).pow(DIM as u32));
+        let level = self.level.checked_sub(1)?;
+        let extent = cell_extent(level);
+        let relative = index_coords::<DIM, 1>(index);
+        Some(Self {
+            min: array::from_fn(|i| self.min[i] + relative[i] * extent),
+            level,
+        })
     }
 
     pub fn bounds(&self) -> TreeBounds<DIM> {
@@ -220,5 +231,38 @@ mod tests {
     #[test]
     fn index_in_parent_mid() {
         assert_eq!(CellCoords::<1>::from_point([5], 2).index_in_parent(), 1);
+    }
+
+    #[test]
+    fn child() {
+        let cell = CellCoords::from_point([0, 0], 8);
+        assert_eq!(
+            cell.child(0).unwrap(),
+            CellCoords {
+                min: [0, 0],
+                level: 7
+            }
+        );
+        assert_eq!(
+            cell.child(1).unwrap(),
+            CellCoords {
+                min: [128, 0],
+                level: 7
+            }
+        );
+        assert_eq!(
+            cell.child(2).unwrap(),
+            CellCoords {
+                min: [0, 128],
+                level: 7
+            }
+        );
+        assert_eq!(
+            cell.child(3).unwrap(),
+            CellCoords {
+                min: [128, 128],
+                level: 7
+            }
+        );
     }
 }
