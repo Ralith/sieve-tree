@@ -722,7 +722,7 @@ struct Node<const DIM: usize, const GRID_EXPONENT: u32> {
     /// Number of elements stored in or beneath this node
     elements: usize,
     state: NodeState<DIM, GRID_EXPONENT>,
-    // This should become `[Node<DIM, GRID_EXPONENT>; SUBDIV.pow(GRID_EXPONENT).pow(DIM)]` as soon as Rust permits that
+    // This should become `[Cell; SUBDIV.pow(GRID_EXPONENT).pow(DIM)]` as soon as Rust permits that
     grid: Box<[Cell]>,
 }
 
