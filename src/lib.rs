@@ -878,7 +878,8 @@ struct Element<T> {
     next: MaybeIndex,
 }
 
-/// Index of coordinates in a cuboidal `grid_size.pow(DIM)` grid
+/// Index of coordinates in a grid of `DIM`-cubes. Each dimension is subdivided by `grid_size`, so
+/// the grid contains `grid_size.pow(DIM)` cells in total.
 fn index_from_local_coords<const DIM: usize>(local_coords: &[u64; DIM], grid_size: u64) -> usize {
     local_coords
         .iter()
@@ -1112,7 +1113,7 @@ mod tests {
         );
     }
 
-    /// Iterator over all relative coordinates within a cuboid grid
+    /// Iterator over all relative coordinates within a grid of `DIM`-cubes
     fn grid<const DIM: usize>(size: u64) -> impl Iterator<Item = [u64; DIM]> {
         let mut cursor = [0u64; DIM];
         core::iter::from_fn(move || {
