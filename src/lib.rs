@@ -277,10 +277,15 @@ impl<const DIM: usize, const GRID_EXPONENT: u32, T> SieveTree<DIM, GRID_EXPONENT
         let bounds = self
             .root
             .as_ref()
-            .map(|x| x.embedding.bounds_from_world(self.granularity, &bounds))
-            .unwrap_or(TreeBounds {
-                min: [0; DIM],
-                max: [0; DIM],
+            .and_then(|x| {
+                // If the intersection test max bounds are before the tree's origin, then we can
+                // skip the intersection test entirely
+                let max = x.embedding.tree_from_world_checked(self.granularity, &bounds.max)?;
+
+                // `min` will saturate so we don't need to check it
+                let min = x.embedding.tree_from_world(self.granularity, &bounds.min);
+
+                Some(TreeBounds { min, max })
             });
         Intersections::new(bounds, &self.elements, self.root.as_ref())
     }
@@ -653,6 +658,27 @@ impl<const DIM: usize> Embedding<DIM> {
     /// Compute the location of the level-0 node that contains `world`
     fn tree_from_world(&self, granularity: f64, world: &[f64; DIM]) -> [u64; DIM] {
         array::from_fn(|i| ((world[i] - self.origin[i]) / granularity) as u64)
+    }
+
+    /// Compute the location of the level-0 node that contains `world` if it can be represented
+    /// as a tree coordinate.
+    ///
+    /// Returns `Some` if all components of `world` are greater than or equal to the corresponding
+    /// components of `origin`, and `None` otherwise.
+    fn tree_from_world_checked(&self, granularity: f64, world: &[f64; DIM]) -> Option<[u64; DIM]> {
+        // Use `array::try_from_fn` when it's stable
+        let mut location = [0; DIM];
+
+        for i in 0..DIM {
+            let shifted = world[i] - self.origin[i];
+            // Note that `-0` should be a valid coordinate, so we don't only check sign
+            if shifted < 0.0 {
+                return None;
+            }
+            location[i] = (shifted / granularity) as u64;
+        }
+
+        Some(location)
     }
 
     /// Compute the tree bounds that contain `world`
@@ -1235,5 +1261,25 @@ mod tests {
                 max: [25.],
             }],
         );
+    }
+
+    #[test]
+    fn regression3() {
+        let mut t = SieveTree::<1, 2, Bounds<1>>::with_granularity(1.);
+        let b1 = Bounds {
+            min: [10.],
+            max: [11.],
+        };
+        t.insert(b1, b1);
+
+        let intersections = t
+            .intersections(Bounds {
+                min: [1.],
+                max: [2.],
+            })
+            .map(|(_, bounds)| *bounds)
+            .collect::<alloc::vec::Vec<_>>();
+
+        assert_eq!(intersections, []);
     }
 }

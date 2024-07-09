@@ -36,10 +36,15 @@ pub struct Intersections<'a, const DIM: usize, const GRID_EXPONENT: u32, T> {
 
 impl<'a, const DIM: usize, const GRID_EXPONENT: u32, T> Intersections<'a, DIM, GRID_EXPONENT, T> {
     pub(crate) fn new(
-        bounds: TreeBounds<DIM>,
+        maybe_bounds: Option<TreeBounds<DIM>>,
         elements: &'a Slab<Element<T>>,
         root: Option<&'a Root<DIM, GRID_EXPONENT>>,
     ) -> Self {
+        let bounds = maybe_bounds.unwrap_or(TreeBounds {
+            min: [0; DIM],
+            max: [0; DIM],
+        });
+
         let mut out = Intersections {
             bounds,
             elements,
@@ -50,6 +55,12 @@ impl<'a, const DIM: usize, const GRID_EXPONENT: u32, T> Intersections<'a, DIM, G
             next_element: ElementIter::default(),
             grid: &[],
         };
+
+        // Skip traversal if the provided bounds are empty
+        if maybe_bounds.is_none() {
+            return out;
+        }
+
         if let Some(root) = root {
             if bounds.intersects(&root.coords.bounds()) {
                 out.traversal.push(root.coords, &root.node);
