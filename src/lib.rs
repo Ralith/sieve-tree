@@ -1264,7 +1264,7 @@ mod tests {
     }
 
     #[test]
-    fn regression3() {
+    fn skips_intersections_if_max_bound_less_than_origin() {
         let mut t = SieveTree::<1, 2, Bounds<1>>::with_granularity(1.);
         let b1 = Bounds {
             min: [10.],
