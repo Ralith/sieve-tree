@@ -741,6 +741,23 @@ impl<const DIM: usize> Bounds<DIM> {
     const fn point(p: [f64; DIM]) -> Self {
         Self { min: p, max: p }
     }
+
+    pub fn loosened(&self, margin: f64) -> Self {
+        Self {
+            min: self.min.map(|x| x - margin),
+            max: self.max.map(|x| x + margin),
+        }
+    }
+}
+
+impl<const DIM: usize> Default for Bounds<DIM> {
+    #[inline]
+    fn default() -> Self {
+        Self {
+            min: [0.0; DIM],
+            max: [0.0; DIM],
+        }
+    }
 }
 
 #[derive(Clone)]
