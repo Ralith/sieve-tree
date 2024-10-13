@@ -756,7 +756,7 @@ impl<const DIM: usize, const GRID_EXPONENT: u32> fmt::Debug for Node<DIM, GRID_E
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Node")
             .field("elements", &self.elements)
-            .field("grid", &GridElements::<DIM, GRID_EXPONENT>(&*self.grid))
+            .field("grid", &GridElements::<DIM, GRID_EXPONENT>(&self.grid))
             .field("state", &self.state)
             .finish()
     }
