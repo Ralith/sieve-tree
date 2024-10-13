@@ -8,9 +8,10 @@ categories = ["data-structures", "no-std"]
 repository = "https://github.com/Ralith/sieve-tree"
 readme = "README.md"
 
-
 [dependencies]
 arrayvec = { version = "0.7.4", default-features = false }
+serde = { version = "1.0.210", default-features = false, features = ["derive"], optional = true }
+serde-big-array = { version = "0.5.1", optional = true }
 slab = { version = "0.4.9", default-features = false }
 
 [dev-dependencies]
@@ -21,3 +22,6 @@ rand_distr = "0.4.3"
 [[bench]]
 name = "bench"
 harness = false
+
+[features]
+serde = ["dep:serde", "dep:serde-big-array", "slab/serde"]

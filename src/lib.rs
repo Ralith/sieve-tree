@@ -4,6 +4,8 @@ extern crate alloc;
 
 use alloc::boxed::Box;
 use core::{array, fmt, mem};
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
 
 use arrayvec::ArrayVec;
 use slab::Slab;
@@ -22,6 +24,7 @@ use traversal::Intersections;
 /// Each tree node owns a grid of `2.pow(GRID_EXPONENT).pow(DIM)` cells. Increasing `GRID_EXPONENT`
 /// makes the tree less sparse, which accelerates random access by reducing indirection in exchange
 /// for exponentially increased memory requirements and less precise balancing.
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Clone)]
 pub struct SieveTree<const DIM: usize, const GRID_EXPONENT: u32, T> {
     /// Length of a level 0 node edge in world space
@@ -455,6 +458,7 @@ fn balance_node<const DIM: usize, const GRID_EXPONENT: u32, T>(
     }
 }
 
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Clone)]
 struct Root<const DIM: usize, const GRID_EXPONENT: u32> {
     embedding: Embedding<DIM>,
@@ -647,9 +651,11 @@ fn unlink<const DIM: usize, const GRID_EXPONENT: u32, T>(
 }
 
 /// Mapping between tree coordinates and world coordinates
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Clone)]
 struct Embedding<const DIM: usize> {
     /// Lower bound of the tree in world space
+    #[cfg_attr(feature = "serde", serde(with = "serde_big_array::BigArray"))]
     origin: [f64; DIM],
 }
 
@@ -727,11 +733,14 @@ fn level_for_extent(extent: u64) -> u32 {
 }
 
 /// An axis-aligned bounding box in world space
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct Bounds<const DIM: usize> {
     /// Smallest point inside the box
+    #[cfg_attr(feature = "serde", serde(with = "serde_big_array::BigArray"))]
     pub min: [f64; DIM],
     /// Largest point inside the box
+    #[cfg_attr(feature = "serde", serde(with = "serde_big_array::BigArray"))]
     pub max: [f64; DIM],
 }
 
@@ -760,6 +769,7 @@ impl<const DIM: usize> Default for Bounds<DIM> {
     }
 }
 
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
 struct Node<const DIM: usize, const GRID_EXPONENT: u32> {
     /// Number of elements stored in or beneath this node
@@ -806,6 +816,7 @@ fn index_coords<const DIM: usize, const GRID_EXPONENT: u32>(index: usize) -> [u6
     })
 }
 
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Clone)]
 enum NodeState<const DIM: usize, const GRID_EXPONENT: u32> {
     /// Has children, and contains only values too large to be stored at a lower level
@@ -910,11 +921,14 @@ impl<const DIM: usize, const GRID_EXPONENT: u32> Default for Node<DIM, GRID_EXPO
     }
 }
 
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(transparent))]
 #[derive(Debug, Clone, Default)]
 struct Cell {
     first_element: MaybeIndex,
 }
 
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Clone)]
 struct Element<T> {
     value: T,
@@ -944,6 +958,8 @@ const fn grid_size<const GRID_EXPONENT: u32>() -> usize {
 }
 
 #[derive(Copy, Clone)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(transparent))]
 struct MaybeIndex(usize);
 
 impl MaybeIndex {

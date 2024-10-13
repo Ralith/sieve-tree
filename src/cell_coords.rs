@@ -2,12 +2,17 @@
 use core::fmt;
 use core::mem;
 
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
+
 use crate::{grid_size, index_from_local_coords, TreeBounds, SUBDIV};
 
 /// Identifies a single cell, anywhere in tree space
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub struct CellCoords<const DIM: usize> {
     /// Point in this cell with the smallest coordinates on each dimension
+    #[cfg_attr(feature = "serde", serde(with = "serde_big_array::BigArray"))]
     pub min: [u64; DIM],
     /// Exponent of `SUBDIV` which is the cell's extent in each dimension
     pub level: u32,
