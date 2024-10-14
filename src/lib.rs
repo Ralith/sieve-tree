@@ -421,6 +421,8 @@ fn balance_node<const DIM: usize, const GRID_EXPONENT: u32, T>(
                     element,
                     target_level == level - 1,
                 );
+                children[child_node_idx].elements += 1;
+
                 // Unlink from `node`
                 let prev_link = match prev_elt {
                     None => &mut cell.first_element,
