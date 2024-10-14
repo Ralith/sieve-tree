@@ -440,6 +440,10 @@ fn balance_node<const DIM: usize, const GRID_EXPONENT: u32, T>(
     while let Some((level, children)) = stack.pop() {
         let level = level - 1;
         for child in children.iter_mut() {
+            if child.elements <= elements_per_cell {
+                continue;
+            }
+
             // TODO: When `children` is a freshly split leaf node, use the return value of `link` in
             // `split` to determine whether any nodes need to be split without redundantly scanning
             // `unsieved_nodes` here. This will require heap allocation until array lengths can
